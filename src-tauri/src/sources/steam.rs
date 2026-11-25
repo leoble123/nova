@@ -107,6 +107,7 @@ pub fn parse_manifest(text: &str, steamapps: &Path, root: &Path) -> Option<Found
     }
     let install_dir = steamapps.join("common").join(&installdir);
     let (cover, hero) = local_art(root, &appid);
+    let icon = local_icon(root, &appid);
     Some(Found {
         game: NewGame {
             title: name,
@@ -118,6 +119,20 @@ pub fn parse_manifest(text: &str, steamapps: &Path, root: &Path) -> Option<Found
         },
         cover,
         hero,
+        icon,
+    })
+}
+
+/// Steam's cached game icon: `<appid>_icon.jpg`, or (newer clients) a file named by its
+/// 40-character hash inside the app's cache folder.
+pub fn local_icon(root: &Path, appid: &str) -> Option<PathBuf> {
+    let cache = root.join("appcache").join("librarycache");
+    let flat = cache.join(format!("{appid}_icon.jpg"));
+    if flat.is_file() {
+        return Some(flat);
+    }
+    std::fs::read_dir(cache.join(appid)).ok()?.flatten().map(|e| e.path()).find(|p| {
+        p.is_file() && p.file_stem().is_some_and(|s| s.len() == 40 && s.to_string_lossy().chars().all(|c| c.is_ascii_hexdigit()))
     })
 }
 
@@ -191,6 +206,7 @@ mod tests {
         std::fs::create_dir_all(root.join("appcache/librarycache/620/abc")).unwrap();
         std::fs::write(root.join("appcache/librarycache/400_library_600x900.jpg"), b"jpg").unwrap();
         std::fs::write(root.join("appcache/librarycache/620/abc/library_600x900.jpg"), b"jpg").unwrap();
+        std::fs::write(root.join("appcache/librarycache/620/0123456789abcdef0123456789abcdef01234567.jpg"), b"jpg").unwrap();
         std::env::set_var("NOVA_STEAM_PATH", &root);
         let (_, found) = scan().unwrap();
         std::env::remove_var("NOVA_STEAM_PATH");
@@ -199,6 +215,7 @@ mod tests {
         assert_eq!(names, ["Portal", "Portal 2"]);
         let p2 = found.iter().find(|f| f.game.source_id == "620").unwrap();
         assert!(p2.cover.is_some());
+        assert!(p2.icon.as_ref().is_some_and(|p| p.to_string_lossy().ends_with("01234567.jpg")));
         assert_eq!(p2.game.launch_uri, "steam://rungameid/620");
         assert!(p2.game.install_dir.ends_with("Portal 2"));
     }

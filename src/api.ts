@@ -8,7 +8,8 @@ export async function initArt() {
   artDir = await invoke<string>("art_dir");
 }
 export function artUrl(name: string): string {
-  if (!name) return "";
+  if (!name || name === "-") return "";
+  if (name.startsWith("data:")) return name; // previews before import
   const sep = artDir.includes("\\") ? "\\" : "/";
   return convertFileSrc(artDir + sep + name);
 }
@@ -31,8 +32,9 @@ export const api = {
   addExecutable: (gameId: number, exe: T.NewExecutable) => invoke<T.Game>("add_executable", { gameId, exe }),
   updateExecutable: (exe: T.Executable) => invoke<T.Game>("update_executable", { exe }),
   removeExecutable: (gameId: number, exeId: number) => invoke<T.Game>("remove_executable", { gameId, exeId }),
-  setArt: (gameId: number, kind: "cover" | "hero", path: string) => invoke<T.Game>("set_art", { gameId, kind, path }),
-  clearArt: (gameId: number, kind: "cover" | "hero") => invoke<T.Game>("clear_art", { gameId, kind }),
+  setArt: (gameId: number, kind: "cover" | "hero" | "icon", path: string) => invoke<T.Game>("set_art", { gameId, kind, path }),
+  clearArt: (gameId: number, kind: "cover" | "hero" | "icon") => invoke<T.Game>("clear_art", { gameId, kind }),
+  exeIconPreview: (path: string) => invoke<string>("exe_icon_preview", { path }),
   imagePreview: (path: string) => invoke<string>("image_preview", { path }),
   fetchOnlineArt: (gameId: number) => invoke<T.Game>("fetch_online_art", { gameId }),
   launch: (id: number, opts: { exeId?: number | null; confirmed?: boolean; admin?: boolean } = {}) =>

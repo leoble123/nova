@@ -30,6 +30,8 @@ export interface Game {
   lastPlayed: number | null;
   playtimeSecs: number;
   notes: string;
+  /** Icon file in the art cache; "" not looked for yet, "-" none found. */
+  icon: string;
   executables: Executable[];
   collections: number[];
   installed: boolean;

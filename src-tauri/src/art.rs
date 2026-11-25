@@ -15,6 +15,8 @@ pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
         Some("webp")
     } else if bytes.starts_with(b"GIF8") {
         Some("gif")
+    } else if bytes.len() > 6 && bytes.starts_with(&[0, 0, 1, 0]) && bytes[4..6] != [0, 0] {
+        Some("ico")
     } else {
         None
     }
@@ -26,10 +28,17 @@ pub fn data_url(path: &Path) -> Result<String> {
     if len > MAX_BYTES {
         bail!("that image is too large (over 25 MB)");
     }
-    let bytes = std::fs::read(path)?;
-    let ext = sniff(&bytes).context("that file isn't a PNG, JPEG, WebP or GIF image")?;
-    let mime = if ext == "jpg" { "jpeg" } else { ext };
-    Ok(format!("data:image/{mime};base64,{}", b64(&bytes)))
+    data_url_bytes(&std::fs::read(path)?)
+}
+
+pub fn data_url_bytes(bytes: &[u8]) -> Result<String> {
+    let ext = sniff(bytes).context("that file isn't a PNG, JPEG, WebP or GIF image")?;
+    let mime = match ext {
+        "jpg" => "jpeg",
+        "ico" => "x-icon",
+        e => e,
+    };
+    Ok(format!("data:image/{mime};base64,{}", b64(bytes)))
 }
 
 fn b64(b: &[u8]) -> String {
@@ -84,6 +93,14 @@ impl ArtStore {
         let resp = ureq::get(url).config().timeout_global(Some(std::time::Duration::from_secs(15))).build().call()?;
         let bytes = resp.into_body().with_config().limit(MAX_BYTES).read_to_vec()?;
         self.put(game_id, kind, &bytes)
+    }
+
+    /// Extract an executable's own icon (read as data, never run) into the cache.
+    pub fn put_exe_icon(&self, game_id: i64, exe: &Path) -> Option<String> {
+        let bytes = match crate::pe::icon(exe)? {
+            crate::pe::Icon::Png(b) | crate::pe::Icon::Ico(b) => b,
+        };
+        self.put(game_id, "icon", &bytes).ok()
     }
 
     /// Old cover files are deleted only from Nova's own cache folder.

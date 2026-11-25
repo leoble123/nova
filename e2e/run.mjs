@@ -112,6 +112,26 @@ try {
   ok((await text()).includes("Moonlit Studio"), "developer read from the exe's version info");
   await shot("03-details");
 
+  console.log("2b. Game icons");
+  await click(".sidebar .btn", "Add game");
+  await js(`window.__novaTestPick = ${JSON.stringify(join(WORLD, "Games/Starfall"))}`);
+  await click(".choice", "Import a game folder");
+  await waitFor(() => !!document.querySelector(".cand"), "Starfall scan");
+  await waitFor(() => !!document.querySelector(".modal .gen .ico"), "icon preview in import", 10000).then(() => ok(true, "import preview shows the exe's icon"), () => ok(false, "import preview shows the exe's icon"));
+  await js(() => { const i = document.querySelector(".modal input"); i.focus(); });
+  await type(".modal input", "Starfall");
+  await click(".modal-foot .btn.primary", "Add to library");
+  await waitFor(() => document.querySelector(".details h1")?.textContent === "Starfall", "Starfall details");
+  await waitFor(() => { const i = document.querySelector(".details .head .gen .ico"); return i && i.complete && i.naturalWidth >= 128; }, "extracted icon renders", 10000).then(
+    () => ok(true, "icon extracted from a real Windows exe and rendered (256px)"),
+    () => ok(false, "icon extracted from a real Windows exe and rendered"),
+  );
+  await shot("03b-icon-details");
+  await click(".sidebar .nav", "Library");
+  await waitFor(() => !!document.querySelector(".game-card .gen .ico"), "icon on library card");
+  ok(true, "generated cover uses the game's icon");
+  ok(await js(() => [...document.querySelectorAll(".game-card")].some((c) => c.textContent.includes("Hollow Knight") && c.querySelector(".card-meta img.game-icon"))), "Steam game shows its cached icon");
+
   console.log("3. A game that really runs: launch, warnings, hand-off, playtime");
   await click(".sidebar .btn", "Add game");
   await js(`window.__novaTestPick = ${JSON.stringify(join(WORLD, "Games/Tiny Quest/play.sh"))}`);
@@ -194,9 +214,11 @@ try {
   await start();
   await waitFor(() => document.querySelectorAll(".game-card").length >= 4, "library after restart", 20000);
   const c2 = await cards();
-  ok(c2.includes("Tiny Quest") && c2.includes("Hades") && !c2.includes("Hollow Sky"), `library restored (${c2.join(", ")})`);
+  ok(c2.includes("Tiny Quest") && c2.includes("Hades") && c2.includes("Starfall") && !c2.includes("Hollow Sky"), `library restored (${c2.join(", ")})`);
+  ok(await js(() => !!document.querySelector(".game-card .gen .ico")), "icons persist across restarts");
   ok((await text()).includes("Indie gems"), "collections restored");
   ok((await text()).toLowerCase().includes("continue playing"), "last played game featured");
+  await sleep(800);
   await shot("08-after-restart");
   await wd("DELETE", "");
 } catch (e) {

@@ -3,7 +3,7 @@ import { api } from "../api";
 import { fail, go, putGame, refresh, refreshCollections, set, toast, useStore } from "../store";
 import type { Game } from "../types";
 import { play } from "../launch";
-import { Confirm, Cover, fmtAgo, fmtPlaytime, heroUrl, Seg, sourceName, useMenu, type MenuItem } from "../components/ui";
+import { Confirm, Cover, fmtAgo, fmtPlaytime, GameIcon, heroUrl, Seg, sourceName, useMenu, type MenuItem } from "../components/ui";
 import * as I from "../components/Icons";
 
 type Sort = "recent" | "name" | "playtime" | "added";
@@ -127,7 +127,7 @@ function GameCard({ g, index, onMenu }: { g: Game; index: number; onMenu: (e: Re
     >
       <Cover game={g} />
       {g.installed && !g.running && (
-        <div style={{ position: "absolute", inset: 0, aspectRatio: "2/3", pointerEvents: "none" }}>
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, aspectRatio: "2/3", pointerEvents: "none" }}>
           <button
             className="play"
             style={{ pointerEvents: "auto", position: "absolute", left: "50%", top: "50%" }}
@@ -142,7 +142,7 @@ function GameCard({ g, index, onMenu }: { g: Game; index: number; onMenu: (e: Re
         </div>
       )}
       <div className="card-meta">
-        <div className="t ellipsis">{g.title}</div>
+        <div className="t"><GameIcon game={g} size={16} /><span>{g.title}</span></div>
         <div className="s ellipsis">
           {g.problem && !g.installed ? <span>{g.problem.split(" (")[0]}</span> : g.playtimeSecs ? <span>{fmtPlaytime(g.playtimeSecs)}</span> : <span>{sourceName(g.source)}</span>}
         </div>

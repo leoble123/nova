@@ -89,6 +89,7 @@ pub fn parse_item(text: &str) -> Option<Found> {
         },
         cover: None,
         hero: None,
+        icon: None,
     })
 }
 

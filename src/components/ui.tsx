@@ -67,7 +67,19 @@ function hash(s: string) {
 }
 
 /** A typographic cover for games without artwork: muted, title-derived gradient. */
-function Generated({ game }: { game: Pick<Game, "title" | "developer" | "source"> }) {
+/** The game's own icon (from its executable or store), or nothing. */
+export function GameIcon({ game, size = 16 }: { game: Pick<Game, "icon">; size?: number }) {
+  const [bad, setBad] = useState(false);
+  const src = artUrl(game.icon);
+  useEffect(() => setBad(false), [game.icon]);
+  if (!src || bad) return null;
+  return <img className="game-icon" src={src} width={size} height={size} alt="" draggable={false} onError={() => setBad(true)} />;
+}
+
+function Generated({ game }: { game: Pick<Game, "title" | "developer" | "source" | "icon"> }) {
+  const [iconOk, setIconOk] = useState(true);
+  const icon = iconOk ? artUrl(game.icon) : "";
+  useEffect(() => setIconOk(true), [game.icon]);
   const h = hash(game.title);
   const hue = h % 360;
   const hue2 = (hue + 40 + (h >> 8) % 60) % 360;
@@ -75,7 +87,13 @@ function Generated({ game }: { game: Pick<Game, "title" | "developer" | "source"
   const len = game.title.length;
   const size = len > 28 ? 17 : len > 16 ? 20 : 25;
   return (
-    <div className="gen" style={{ ["--g" as string]: g, ["--gt" as string]: `${size}px` }}>
+    <div className={`gen ${icon ? "has-icon" : ""}`} style={{ ["--g" as string]: g, ["--gt" as string]: `${size}px` }}>
+      {icon && (
+        <>
+          <img className="ico-bg" src={icon} alt="" draggable={false} />
+          <img className="ico" src={icon} alt="" draggable={false} onError={() => setIconOk(false)} />
+        </>
+      )}
       <div className="gt">{game.title}</div>
       <div className="gs">{game.developer || sourceName(game.source)}</div>
     </div>

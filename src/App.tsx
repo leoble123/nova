@@ -277,7 +277,7 @@ export default function App() {
         if (get().view.name !== "library") go({ name: "library" });
         setTimeout(() => document.getElementById("search")?.focus(), 30);
       }
-      if (e.key === "Escape" && !typing && get().view.name === "game" && !get().importOpen && !get().prompt) back();
+      if (e.key === "Escape" && !typing && get().view.name === "game" && !get().importOpen && !get().prompt && !document.querySelector(".menu, .modal-back")) back();
       if ((e.key === "n" && (e.ctrlKey || e.metaKey))) {
         e.preventDefault();
         set({ importOpen: true });

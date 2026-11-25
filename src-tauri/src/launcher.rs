@@ -85,6 +85,7 @@ struct Run {
 pub struct Launcher {
     db: Arc<Db>,
     runs: Mutex<HashMap<i64, Run>>,
+    starting: Mutex<std::collections::HashSet<i64>>,
     emit: Box<dyn Fn(SessionEvent) + Send + Sync>,
     recovery: PathBuf,
 }
@@ -179,7 +180,7 @@ pub fn path_inside(child: &Path, dir: &Path) -> bool {
 
 impl Launcher {
     pub fn new(db: Arc<Db>, data_dir: &Path, emit: impl Fn(SessionEvent) + Send + Sync + 'static) -> Arc<Launcher> {
-        let l = Arc::new(Launcher { db, runs: Mutex::new(HashMap::new()), emit: Box::new(emit), recovery: data_dir.join("active-sessions.json") });
+        let l = Arc::new(Launcher { db, runs: Mutex::new(HashMap::new()), starting: Mutex::new(Default::default()), emit: Box::new(emit), recovery: data_dir.join("active-sessions.json") });
         l.recover();
         l
     }
@@ -218,9 +219,20 @@ impl Launcher {
     }
 
     pub fn launch(self: &Arc<Self>, game: &Game, exe_id: Option<i64>, confirmed: bool, elevation: Elevation) -> Result<RunningGame, LaunchFail> {
-        if self.is_running(game.id) {
-            return Err(fail("already-running", format!("{} is already running.", game.title)));
+        // Reserve the game first, so two quick clicks on Play can't start it twice.
+        {
+            let runs = self.runs.lock().unwrap();
+            let mut starting = self.starting.lock().unwrap();
+            if runs.contains_key(&game.id) || !starting.insert(game.id) {
+                return Err(fail("already-running", format!("{} is already running.", game.title)));
+            }
         }
+        let r = self.launch_inner(game, exe_id, confirmed, elevation);
+        self.starting.lock().unwrap().remove(&game.id);
+        r
+    }
+
+    fn launch_inner(self: &Arc<Self>, game: &Game, exe_id: Option<i64>, confirmed: bool, elevation: Elevation) -> Result<RunningGame, LaunchFail> {
         let plan = plan(game, exe_id)?;
         if let Target::Direct { exe, .. } = &plan.target {
             // Re-check the file right before running it: it may have changed since import.
@@ -250,10 +262,10 @@ impl Launcher {
         let game_id = game.id;
         let is_uri = matches!(plan.target, Target::Uri(_));
         let dirs = plan.track_dirs.clone();
-        std::thread::Builder::new()
-            .name(format!("track-{game_id}"))
-            .spawn(move || me.track(game_id, proc, dirs, is_uri, started, started_at, kill, fps))
-            .map_err(|e| fail("spawn-failed", e.to_string()))?;
+        if let Err(err) = std::thread::Builder::new().name(format!("track-{game_id}")).spawn(move || me.track(game_id, proc, dirs, is_uri, started, started_at, kill, fps)) {
+            self.runs.lock().unwrap().remove(&game_id);
+            return Err(fail("spawn-failed", err.to_string()));
+        }
         Ok(RunningGame { game_id, started_at, title: game.title.clone(), elevated: elevation == Elevation::UserRequestedAdmin })
     }
 
@@ -752,6 +764,26 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         assert!(!l.is_running(id), "stop should end the session");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn simultaneous_launches_start_once() {
+        let d = tempfile::tempdir().unwrap();
+        let exe = d.path().join("game");
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        let id = db
+            .add_game(&NewGame { title: "Once".into(), install_dir: d.path().to_string_lossy().into(), launch_args: "3".into(), executables: vec![NewExecutable { path: exe.to_string_lossy().into(), ..Default::default() }], ..Default::default() }, "")
+            .unwrap();
+        let l = Launcher::new(db.clone(), d.path(), |_| {});
+        let g = db.get_game(id).unwrap();
+        let oks: usize = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..8).map(|_| s.spawn(|| l.launch(&g, None, true, Elevation::Normal).is_ok())).collect();
+            hs.into_iter().map(|h| h.join().unwrap() as usize).sum()
+        });
+        assert_eq!(oks, 1);
+        l.stop(id);
     }
 
     #[test]

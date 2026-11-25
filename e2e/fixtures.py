@@ -75,6 +75,14 @@ put("Games/Tiny Quest/data/ok", "x")
 put("Games/Tiny Quest/play.sh", '#!/bin/sh\n# needs the game root as working dir\n[ -f data/ok ] || exit 3\n./bin/tinyquest 6 &\nexit 0\n')
 os.chmod(os.path.join(g, "play.sh"), 0o755)
 
+# --- A real Windows program with a real icon (Nova's own Windows build), for icon extraction.
+real = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../src-tauri/target/x86_64-pc-windows-gnu/release/nova.exe")
+if os.path.exists(real):
+    os.makedirs(os.path.join(root, "Games/Starfall"), exist_ok=True)
+    shutil.copy(real, os.path.join(root, "Games/Starfall/Starfall.exe"))
+# Steam's cached icon (newer clients: a 40-hex-named file in the app's folder).
+art("Steam/appcache/librarycache/367520/0123456789abcdef0123456789abcdef01234567.jpg", 64, 64, (200, 210, 230), (90, 100, 140), "")
+
 # --- lagless: send a test tone (no sound card here) with synthetic game stats.
 put("lagless/settings.json", json.dumps({"mode": "Send", "source": "Tone", "perf_stats": True, "volume": 0.8}))
 print(root)

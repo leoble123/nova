@@ -30,6 +30,7 @@ pub fn scan() -> anyhow::Result<(PathBuf, Vec<Found>)> {
             game: NewGame { title: name, source: Some(Source::Gog), source_id: id.clone(), install_dir: path, executables: exes, ..Default::default() },
             cover: None,
             hero: None,
+            icon: None,
         });
     }
     Ok((PathBuf::from("HKLM\\SOFTWARE\\GOG.com\\Games"), out))

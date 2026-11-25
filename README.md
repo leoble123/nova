@@ -27,7 +27,7 @@ inside the same app.
   recorded automatically, and survive Nova being closed or crashing mid-game.
 - **Library tools:** covers (Steam's cached art, your own images, or a generated typographic
   cover), favorites, collections, hide, search (title, developer, publisher), filters, sorting,
-  three cover sizes, a "continue playing" hero, drag-and-drop import, keyboard shortcuts
+  three cover sizes, game icons (read from each executable or Steam's cache, never by running it), a "continue playing" hero, drag-and-drop import, keyboard shortcuts
   (`/` or `Ctrl+F` search, `Ctrl+N` add a game, `Esc` back).
 - **Handles the messy cases:** missing executables, disconnected drives and unreadable folders
   show a clear state with a fix ("Locate folder" re-points the game and its executables),

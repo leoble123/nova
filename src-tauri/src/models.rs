@@ -71,6 +71,8 @@ pub struct Game {
     pub last_played: Option<i64>,
     pub playtime_secs: i64,
     pub notes: String,
+    /// The game's icon in the art cache ("" = not looked for yet, "-" = none).
+    pub icon: String,
     pub executables: Vec<Executable>,
     pub collections: Vec<i64>,
     // ---- computed when listing, not stored

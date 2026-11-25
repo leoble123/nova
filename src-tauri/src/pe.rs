@@ -27,7 +27,7 @@ pub struct PeInfo {
 const MAX_RSRC: u64 = 16 * 1024 * 1024;
 
 pub fn inspect(path: &Path) -> PeInfo {
-    inspect_inner(path).unwrap_or_default()
+    inspect_inner(path).map(|(i, _)| i).unwrap_or_default()
 }
 
 fn rd16(b: &[u8], o: usize) -> Option<u16> {
@@ -38,7 +38,10 @@ fn rd32(b: &[u8], o: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?))
 }
 
-fn inspect_inner(path: &Path) -> Option<PeInfo> {
+/// The resource section (bytes, and its RVA) along with the header facts.
+type Rsrc = Option<(Vec<u8>, u32)>;
+
+fn inspect_inner(path: &Path) -> Option<(PeInfo, Rsrc)> {
     let mut f = File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let mut head = vec![0u8; 4096.min(len as usize)];
@@ -110,6 +113,7 @@ fn inspect_inner(path: &Path) -> Option<PeInfo> {
             rsrc = Some((start, size));
         }
     }
+    let mut section: Rsrc = None;
     if let Some((start, size)) = rsrc {
         if start < len && size > 0 {
             let size = size.min(len - start);
@@ -119,10 +123,84 @@ fn inspect_inner(path: &Path) -> Option<PeInfo> {
                 info.company_name = version_string(&buf, "CompanyName");
                 info.file_description = version_string(&buf, "FileDescription");
                 info.requires_admin = find(&buf, b"requireAdministrator").is_some();
+                section = Some((buf, rsrc_rva));
             }
         }
     }
-    Some(info)
+    Some((info, section))
+}
+
+// ------------------------------------------------------------------ icons
+
+/// An icon image ready to save: PNG bytes, or a single-image .ico file.
+#[derive(Debug, PartialEq)]
+pub enum Icon {
+    Png(Vec<u8>),
+    Ico(Vec<u8>),
+}
+
+const RT_ICON: u32 = 3;
+const RT_GROUP_ICON: u32 = 14;
+
+/// Entries of one resource directory level: (id or name offset, is_dir, offset).
+fn res_entries(buf: &[u8], dir: usize) -> Vec<(u32, bool, usize)> {
+    let named = rd16(buf, dir + 12).unwrap_or(0) as usize;
+    let ids = rd16(buf, dir + 14).unwrap_or(0) as usize;
+    (0..(named + ids).min(4096))
+        .filter_map(|i| {
+            let e = dir + 16 + i * 8;
+            let name = rd32(buf, e)?;
+            let off = rd32(buf, e + 4)?;
+            Some((name, off & 0x8000_0000 != 0, (off & 0x7fff_ffff) as usize))
+        })
+        .collect()
+}
+
+/// Follow a type -> name -> language path to the first data blob (`id` None = first name).
+fn res_data(buf: &[u8], rva: u32, ty: u32, id: Option<u32>) -> Option<&[u8]> {
+    let (_, d1, o1) = res_entries(buf, 0).into_iter().find(|e| e.0 == ty)?;
+    if !d1 {
+        return None;
+    }
+    let names = res_entries(buf, o1);
+    let (_, d2, o2) = match id {
+        Some(id) => names.into_iter().find(|e| e.0 == id)?,
+        None => names.into_iter().next()?,
+    };
+    let leaf = if d2 { res_entries(buf, o2).into_iter().find(|e| !e.1)?.2 } else { o2 };
+    let data_rva = rd32(buf, leaf)?;
+    let size = rd32(buf, leaf + 4)? as usize;
+    let at = data_rva.checked_sub(rva)? as usize;
+    buf.get(at..at.checked_add(size)?)
+}
+
+/// The program's main icon (the one Explorer shows), as data. Never runs the file.
+pub fn icon(path: &Path) -> Option<Icon> {
+    let (_, section) = inspect_inner(path)?;
+    let (buf, rva) = section?;
+    let group = res_data(&buf, rva, RT_GROUP_ICON, None)?;
+    let count = rd16(group, 4)? as usize;
+    // Best image: largest, then deepest colour.
+    let best = (0..count.min(64))
+        .filter_map(|i| {
+            let e = 6 + i * 14;
+            let w = *group.get(e)? as u32;
+            let bits = rd16(group, e + 6)?;
+            let id = rd16(group, e + 12)? as u32;
+            Some((if w == 0 { 256 } else { w }, bits, id, group.get(e..e + 12)?.to_vec()))
+        })
+        .max_by_key(|(w, bits, _, _)| (*w, *bits))?;
+    let data = res_data(&buf, rva, RT_ICON, Some(best.2))?;
+    if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Some(Icon::Png(data.to_vec()));
+    }
+    // A DIB: wrap it as a one-image .ico (header + directory entry + data).
+    let mut ico = vec![0, 0, 1, 0, 1, 0];
+    ico.extend_from_slice(&best.3[..8]); // width, height, colours, reserved, planes, bit count
+    ico.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    ico.extend_from_slice(&22u32.to_le_bytes());
+    ico.extend_from_slice(data);
+    Some(Icon::Ico(ico))
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -197,9 +275,71 @@ pub mod testpe {
         e
     }
 
+    /// A resource section holding one icon group with two images (16px DIB and 256px PNG),
+    /// laid out at RVA 0x1000 like `build` places it.
+    pub fn icon_rsrc(png: &[u8]) -> Vec<u8> {
+        // Layout: root dir (2 types) | type dirs | name dirs | lang dirs | data entries | blobs
+        let dib = vec![0x28u8; 40 + 16 * 16 * 4 + 64];
+        let mut grp = vec![0, 0, 1, 0, 2, 0];
+        grp.extend([16, 16, 0, 0, 1, 0, 32, 0]);
+        grp.extend((dib.len() as u32).to_le_bytes());
+        grp.extend(1u16.to_le_bytes());
+        grp.extend([0, 0, 0, 0, 1, 0, 32, 0]);
+        grp.extend((png.len() as u32).to_le_bytes());
+        grp.extend(2u16.to_le_bytes());
+        let dir = |entries: &[(u32, u32)]| {
+            let mut d = vec![0u8; 12];
+            d.extend(0u16.to_le_bytes());
+            d.extend((entries.len() as u16).to_le_bytes());
+            for (id, off) in entries {
+                d.extend(id.to_le_bytes());
+                d.extend(off.to_le_bytes());
+            }
+            d
+        };
+        const D: u32 = 0x8000_0000;
+        // Offsets (fixed sizes): root 32, icon type dir 32, group type dir 24, 3 name dirs 24 each, 3 lang dirs 24 each.
+        let root = 0;
+        let t_icon = 32;
+        let t_grp = 64;
+        let n = [88, 112, 136]; // language dirs for icon#1, icon#2, group#1
+        let de = [160, 176, 192];
+        let blobs = 208usize;
+        let mut out = Vec::new();
+        out.extend(dir(&[(3, D | t_icon), (14, D | t_grp)]));
+        out.extend(dir(&[(1, D | n[0]), (2, D | n[1])]));
+        out.extend(dir(&[(1, D | n[2])]));
+        for d in de {
+            out.extend(dir(&[(1033, d)]));
+        }
+        assert_eq!(out.len(), 160);
+        let _ = root;
+        let blob_list: [&[u8]; 3] = [&dib, png, &grp];
+        let mut at = blobs;
+        for b in blob_list {
+            out.extend(((0x1000 + at) as u32).to_le_bytes());
+            out.extend((b.len() as u32).to_le_bytes());
+            out.extend([0u8; 8]);
+            at += b.len();
+        }
+        assert_eq!(out.len(), blobs);
+        for b in blob_list {
+            out.extend_from_slice(b);
+        }
+        while out.len() % 4 != 0 {
+            out.push(0); // resource data is 4-byte aligned in real files
+        }
+        out
+    }
+
     /// gui: subsystem 2 vs 3. `extra_rsrc` is appended to the resource section (manifest text).
     pub fn build(gui: bool, product: &str, company: &str, extra_rsrc: &[u8], dll: bool) -> Vec<u8> {
-        let mut rsrc = Vec::new();
+        build_with(gui, product, company, extra_rsrc, dll, Vec::new())
+    }
+
+    /// Same, but the resource section starts with `head` (e.g. `icon_rsrc`).
+    pub fn build_with(gui: bool, product: &str, company: &str, extra_rsrc: &[u8], dll: bool, head: Vec<u8>) -> Vec<u8> {
+        let mut rsrc = head;
         rsrc.extend(string_entry("CompanyName", company));
         rsrc.extend(string_entry("ProductName", product));
         rsrc.extend_from_slice(extra_rsrc);
@@ -262,6 +402,20 @@ mod tests {
         assert_eq!(i.company_name, "Moonlit Studio");
         assert!(i.requires_admin);
         assert!(!i.has_signature);
+    }
+
+    #[test]
+    fn extracts_largest_icon_as_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = b"\x89PNG\r\n\x1a\nfake-256px-icon".to_vec();
+        let p = dir.path().join("g.exe");
+        std::fs::write(&p, testpe::build_with(true, "G", "S", &[], false, testpe::icon_rsrc(&png))).unwrap();
+        assert_eq!(inspect(&p).product_name, "G", "version info still found after the icon tree");
+        assert_eq!(icon(&p), Some(Icon::Png(png)));
+        // No icon resources: None, not a panic.
+        let q = dir.path().join("h.exe");
+        std::fs::write(&q, testpe::build(true, "", "", &[], false)).unwrap();
+        assert_eq!(icon(&q), None);
     }
 
     #[test]

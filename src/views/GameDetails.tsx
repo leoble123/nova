@@ -3,7 +3,7 @@ import { api, pickExe, pickFolder, pickImage } from "../api";
 import { back, fail, go, putGame, refreshCollections, toast, useStore } from "../store";
 import type { Executable, Game, Session } from "../types";
 import { play } from "../launch";
-import { Cover, fmtAgo, fmtPlaytime, heroUrl, Modal, sourceName, useMenu, useNow, fmtClock, type MenuItem } from "../components/ui";
+import { Cover, GameIcon, fmtAgo, fmtPlaytime, heroUrl, Modal, sourceName, useMenu, useNow, fmtClock, type MenuItem } from "../components/ui";
 import { RemoveConfirm } from "./Library";
 import { PerfCard } from "./Audio";
 import * as I from "../components/Icons";
@@ -217,8 +217,15 @@ export function GameDetails({ id }: { id: number }) {
   if (!g) return loaded ? <div className="page"><div className="empty"><h2>This game isn't in your library</h2><button className="btn" onClick={() => go({ name: "library" })}>Back to library</button></div></div> : null;
 
   const hero = heroUrl(g);
-  const setArt = async (kind: "cover" | "hero") => {
-    const p = await pickImage(kind === "cover" ? "Choose a cover image (portrait works best)" : "Choose a background image (wide works best)");
+  const safely = (f: () => Promise<Game>) => async () => {
+    try {
+      putGame(await f());
+    } catch (e) {
+      fail(e);
+    }
+  };
+  const setArt = async (kind: "cover" | "hero" | "icon") => {
+    const p = await pickImage(kind === "cover" ? "Choose a cover image (portrait works best)" : kind === "icon" ? "Choose an icon (square works best)" : "Choose a background image (wide works best)");
     if (!p) return;
     try {
       putGame(await api.setArt(g.id, kind, p));
@@ -240,14 +247,15 @@ export function GameDetails({ id }: { id: number }) {
     { label: "Edit details…", icon: <I.IconEdit size={15} />, onClick: () => setEdit(true) },
     { label: "Change cover…", icon: <I.IconImage size={15} />, onClick: () => setArt("cover") },
     { label: "Change background…", icon: <I.IconImage size={15} />, onClick: () => setArt("hero") },
-    ...(g.cover ? [{ label: "Use generated cover", icon: <I.IconImage size={15} />, onClick: async () => putGame(await api.clearArt(g.id, "cover")) }] : []),
+    { label: "Change icon…", icon: <I.IconImage size={15} />, onClick: () => setArt("icon") },
+    ...(g.cover ? [{ label: "Use generated cover", icon: <I.IconImage size={15} />, onClick: safely(() => api.clearArt(g.id, "cover")) }] : []),
     ...(g.source === "steam" && settings?.onlineArt ? [{ label: fetching ? "Downloading…" : "Download artwork & info from Steam", icon: <I.IconRefresh size={15} />, onClick: fetchArt, disabled: fetching }] : []),
     { sep: true },
     ...(g.installDir ? [{ label: "Show in folder", icon: <I.IconFolder size={15} />, onClick: () => api.reveal(g.installDir).catch(fail) }] : []),
     {
       label: g.hidden ? "Unhide" : "Hide from library",
       icon: <I.IconEyeOff size={15} />,
-      onClick: async () => putGame(await api.updateGame(g.id, { hidden: !g.hidden })),
+      onClick: safely(() => api.updateGame(g.id, { hidden: !g.hidden })),
     },
     { label: "Remove from library…", icon: <I.IconTrash size={15} />, danger: true, onClick: () => setRemoving(true) },
   ];
@@ -261,9 +269,13 @@ export function GameDetails({ id }: { id: number }) {
         label: c.name,
         checked: g.collections.includes(c.id),
         onClick: async () => {
-          await api.setInCollection(c.id, g.id, !g.collections.includes(c.id)).catch(fail);
-          putGame(await api.getGame(g.id));
-          refreshCollections();
+          try {
+            await api.setInCollection(c.id, g.id, !g.collections.includes(c.id));
+            putGame(await api.getGame(g.id));
+            refreshCollections();
+          } catch (e) {
+            fail(e);
+          }
         },
       }))
     : [{ label: "Create a collection from the sidebar first", disabled: true }];
@@ -280,6 +292,7 @@ export function GameDetails({ id }: { id: number }) {
           <div className="cover-wrap"><Cover game={g} badges={false} /></div>
           <div className="grow" style={{ paddingBottom: 4, minWidth: 0 }}>
             <div className="row" style={{ gap: 8 }}>
+              <GameIcon game={g} size={22} />
               <span className="pill">{sourceName(g.source)}</span>
               {g.running ? <span className="pill good"><span className="dot live" /> Playing · {fmtClock((now - (running?.startedAt ?? now)) / 1000)}</span> : g.installed ? <span className="pill good">Installed</span> : <span className="pill warn">{g.problem || "Not installed"}</span>}
               {g.hidden && <span className="pill">Hidden</span>}
@@ -299,7 +312,7 @@ export function GameDetails({ id }: { id: number }) {
                   <button ref={playMenuRef} className="btn primary lg" disabled={!g.installed || playItems.length === 0} aria-label="More ways to launch" onClick={() => playMenuRef.current && menu.openAt(playMenuRef.current, playItems)}><I.IconChevronDown size={16} /></button>
                 </div>
               )}
-              <button className="btn lg icon" style={{ width: 46 }} aria-label={g.favorite ? "Remove from favorites" : "Add to favorites"} onClick={async () => putGame(await api.updateGame(g.id, { favorite: !g.favorite }))}>
+              <button className="btn lg icon" style={{ width: 46 }} aria-label={g.favorite ? "Remove from favorites" : "Add to favorites"} onClick={safely(() => api.updateGame(g.id, { favorite: !g.favorite }))}>
                 <I.IconStar size={18} filled={g.favorite} style={{ color: g.favorite ? "#ffd36e" : undefined }} />
               </button>
               <button className="btn lg icon" style={{ width: 46 }} aria-label="Collections" onClick={(e) => menu.openAt(e.currentTarget, collectionItems)}><I.IconCollection size={18} /></button>

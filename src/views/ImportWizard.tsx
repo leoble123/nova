@@ -58,6 +58,7 @@ function Review({ scan, single, onBack, onDone }: { scan: ScanResult; single: bo
   const [args, setArgs] = useState("");
   const [cover, setCover] = useState("");
   const [coverUrl, setCoverUrl] = useState("");
+  const [iconUrl, setIconUrl] = useState("");
   useEffect(() => {
     if (!cover) return setCoverUrl("");
     api.imagePreview(cover).then(setCoverUrl).catch((e) => { toast(errText(e), "bad"); setCover(""); });
@@ -73,6 +74,10 @@ function Review({ scan, single, onBack, onDone }: { scan: ScanResult; single: bo
   const prefC = cands.find((c) => c.path === pref);
   const prefWorst = prefC ? worst(prefC.warnings) : "";
   useEffect(() => setAck(false), [pref]);
+  useEffect(() => {
+    setIconUrl("");
+    if (pref) api.exeIconPreview(pref).then(setIconUrl).catch(() => {});
+  }, [pref]);
   // If the best pick is in "others" (e.g. only tools found), show them.
   useEffect(() => {
     if (prefC && !likely(prefC)) setShowAll(true);
@@ -114,7 +119,7 @@ function Review({ scan, single, onBack, onDone }: { scan: ScanResult; single: bo
     setBusy(false);
   };
 
-  const preview: Game = { id: 0, title: title || "Untitled", source: "manual", sourceId: "", developer, publisher, description: "", installDir, workingDir, launchArgs: args, launchUri: "", preferredExeId: null, cover: "", hero: "", favorite: false, hidden: false, addedAt: 0, lastPlayed: null, playtimeSecs: 0, notes: "", executables: [], collections: [], installed: true, problem: "", running: false };
+  const preview: Game = { id: 0, title: title || "Untitled", source: "manual", sourceId: "", developer, publisher, description: "", installDir, workingDir, launchArgs: args, launchUri: "", preferredExeId: null, cover: "", hero: "", favorite: false, hidden: false, addedAt: 0, lastPlayed: null, playtimeSecs: 0, notes: "", icon: iconUrl, executables: [], collections: [], installed: true, problem: "", running: false };
 
   return (
     <>

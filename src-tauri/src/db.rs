@@ -13,7 +13,7 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE games (
@@ -75,7 +75,7 @@ CREATE TABLE settings (
 "#;
 
 const GAME_COLS: &str = "id, title, source, source_id, developer, publisher, description, install_dir, working_dir, \
-     launch_args, launch_uri, preferred_exe_id, cover, hero, favorite, hidden, added_at, last_played, playtime_secs, notes";
+     launch_args, launch_uri, preferred_exe_id, cover, hero, favorite, hidden, added_at, last_played, playtime_secs, notes, icon";
 
 fn game_from_row(r: &Row) -> rusqlite::Result<Game> {
     Ok(Game {
@@ -99,6 +99,7 @@ fn game_from_row(r: &Row) -> rusqlite::Result<Game> {
         last_played: r.get(17)?,
         playtime_secs: r.get(18)?,
         notes: r.get(19)?,
+        icon: r.get(20)?,
         executables: Vec::new(),
         collections: Vec::new(),
         installed: false,
@@ -132,6 +133,10 @@ impl Db {
         }
         if version < 1 {
             conn.execute_batch(&format!("BEGIN; {MIGRATION_1} PRAGMA user_version = 1; COMMIT;"))?;
+        }
+        if version < 2 {
+            // Game icons: a file in the art cache, "" = not looked for yet, "-" = none found.
+            conn.execute_batch("BEGIN; ALTER TABLE games ADD COLUMN icon TEXT NOT NULL DEFAULT ''; PRAGMA user_version = 2; COMMIT;")?;
         }
         Ok(Db { conn: Mutex::new(conn) })
     }
@@ -309,7 +314,11 @@ impl Db {
     }
 
     pub fn set_art(&self, id: i64, kind: &str, file: &str) -> Result<()> {
-        let col = if kind == "hero" { "hero" } else { "cover" };
+        let col = match kind {
+            "hero" => "hero",
+            "icon" => "icon",
+            _ => "cover",
+        };
         self.c().execute(&format!("UPDATE games SET {col} = ?1 WHERE id = ?2"), params![file, id])?;
         Ok(())
     }
@@ -562,6 +571,20 @@ mod tests {
         db.create_collection("RPG").unwrap();
         assert!(db.create_collection("rpg").is_err());
         assert!(db.create_collection("  ").is_err());
+    }
+
+    #[test]
+    fn migrates_version_1_libraries() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("old.db");
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(&format!("{MIGRATION_1} PRAGMA user_version = 1;")).unwrap();
+            c.execute("INSERT INTO games (title, added_at) VALUES ('Old', 1)", []).unwrap();
+        }
+        let db = Db::open(&p).unwrap();
+        let g = &db.list_games().unwrap()[0];
+        assert_eq!((g.title.as_str(), g.icon.as_str()), ("Old", ""));
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub struct Found {
     pub game: NewGame,
     pub cover: Option<PathBuf>,
     pub hero: Option<PathBuf>,
+    pub icon: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
