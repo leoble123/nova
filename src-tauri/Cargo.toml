@@ -1,0 +1,56 @@
+[package]
+name = "nova"
+version = "1.0.0"
+edition = "2021"
+description = "Nova: a unified PC game library and launcher"
+default-run = "nova"
+
+[lib]
+name = "nova_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "nova"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+walkdir = "2"
+# Same versions lagless uses, so they're shared rather than built twice.
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+cpal = "0.15"
+# lagless: low-latency PC audio streaming + game stats, linked in as a library.
+lagless = { git = "https://github.com/leoble123/lagless", rev = "fb84267e7ac8c0b6370cd3343242014044828eca" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_WinTrust",
+    "Win32_Security_Cryptography",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

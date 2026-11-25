@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "overlay",
+  "description": "FPS counter and alert overlays: listen to events only",
+  "windows": ["osd", "alert"],
+  "permissions": ["core:event:default"]
+}
