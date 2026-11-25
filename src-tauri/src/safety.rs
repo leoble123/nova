@@ -72,13 +72,24 @@ pub fn quick(path: &Path, pe: &PeInfo, size: u64) -> Vec<Warning> {
     let full = path.to_string_lossy().to_lowercase().replace('/', "\\");
     if full.contains("\\windows\\system32") || full.contains("\\windows\\syswow64") || full.starts_with("c:\\windows\\") {
         out.push(w(Level::Danger, "system", "This is part of Windows itself, not a game."));
-    } else if full.contains("\\appdata\\local\\temp\\") || full.contains("\\temp\\") {
+    } else if in_system_temp(&full) {
         out.push(w(Level::Warn, "temp", "Located in a temporary folder. Games normally aren't run from there."));
     }
     if is_hidden(path) {
         out.push(w(Level::Warn, "hidden", "The file is marked hidden."));
     }
     out
+}
+
+/// The user's or Windows' temp folder (where downloads and installers unpack), not just any
+/// folder that happens to be called "Temp".
+fn in_system_temp(full_lower: &str) -> bool {
+    let norm = |p: std::path::PathBuf| p.to_string_lossy().to_lowercase().replace('/', "\\").trim_end_matches('\\').to_string() + "\\";
+    let mut roots = vec![norm(std::env::temp_dir())];
+    if let Some(w) = std::env::var_os("WINDIR") {
+        roots.push(norm(std::path::PathBuf::from(w).join("Temp")));
+    }
+    full_lower.contains("\\appdata\\local\\temp\\") || roots.iter().any(|r| full_lower.starts_with(r.as_str()))
 }
 
 /// Slower checks for the executables you're actually choosing (or launching).
@@ -214,10 +225,26 @@ mod tests {
 
     #[test]
     fn clean_game_has_no_serious_warnings() {
-        let d = tempfile::tempdir().unwrap();
+        // Outside the system temp folder (which is flagged, see below).
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("test-games");
+        std::fs::create_dir_all(&base).unwrap();
+        let d = tempfile::tempdir_in(&base).unwrap();
         let p = d.path().join("HollowSky.exe");
         std::fs::write(&p, testpe::build(true, "Hollow Sky", "Moonlit", &[], false)).unwrap();
         let ws = quick(&p, &inspect(&p), 30_000_000);
         assert!(worst(&ws).is_none_or(|l| l == Level::Info), "{ws:?}");
+        // A folder merely named "Temp" isn't the system temp folder.
+        let t = d.path().join("Temp").join("Game.exe");
+        std::fs::create_dir_all(t.parent().unwrap()).unwrap();
+        std::fs::write(&t, testpe::build(true, "G", "M", &[], false)).unwrap();
+        assert!(!codes(&quick(&t, &inspect(&t), 30_000_000)).contains(&"temp"));
+    }
+
+    #[test]
+    fn programs_in_the_system_temp_folder_are_flagged() {
+        let d = tempfile::tempdir().unwrap(); // the real temp folder
+        let p = d.path().join("setup_game.exe");
+        std::fs::write(&p, testpe::build(true, "", "", &[], false)).unwrap();
+        assert!(codes(&quick(&p, &inspect(&p), 30_000_000)).contains(&"temp"));
     }
 }
