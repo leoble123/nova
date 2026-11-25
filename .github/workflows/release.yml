@@ -1,19 +1,19 @@
 name: release
 # Shipping = bump `version` in src-tauri/Cargo.toml and push to main.
-# When that version has no release yet, this builds Nova, signs the update, and publishes it to
-# the public binaries-only feed that installed copies update from (the source stays private).
-#
-# Needs two repository secrets:
-#   NOVA_UPDATE_KEY       hex Ed25519 private key matching PUBLIC_KEY in src-tauri/src/update.rs
-#   NOVA_RELEASES_TOKEN   fine-grained token with Contents: read & write on the releases repo
+# When that version has no release yet, this builds and tests Nova and publishes GitHub Release
+# v<version> with Nova.exe, the installer and latest.json, which installed copies update from.
+# No secrets needed: the workflow's own token publishes to this repository.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
-  RELEASES_REPO: leoble123/nova-releases
   CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   release:
@@ -23,14 +23,10 @@ jobs:
       - name: Version not released yet?
         id: ver
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.NOVA_RELEASES_TOKEN }}
         run: |
           v=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::NOVA_RELEASES_TOKEN isn't set; skipping the release"; echo "skip=true" >> "$GITHUB_OUTPUT"
-          elif gh release view "v$v" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+          if gh release view "v$v" >/dev/null 2>&1; then
             echo "v$v is already released"; echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -50,19 +46,15 @@ jobs:
         working-directory: src-tauri
       - if: steps.ver.outputs.skip == 'false'
         run: npx tauri build
-      - name: Sign and publish
+      - name: Publish
         if: steps.ver.outputs.skip == 'false'
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.NOVA_RELEASES_TOKEN }}
-          NOVA_UPDATE_KEY: ${{ secrets.NOVA_UPDATE_KEY }}
         run: |
           v="${{ steps.ver.outputs.version }}"
           mkdir out
           cp src-tauri/target/release/nova.exe out/Nova.exe
           cp src-tauri/target/release/bundle/nsis/*-setup.exe "out/Nova-$v-setup.exe"
-          pip install --quiet cryptography
           notes=$(git log -1 --format=%s)
-          python tools/sign_update.py out/Nova.exe "$v" "https://github.com/$RELEASES_REPO/releases/download/v$v/Nova.exe" "$notes" > out/latest.json
+          python tools/make_manifest.py out/Nova.exe "$v" "https://github.com/${{ github.repository }}/releases/download/v$v/Nova.exe" "$notes" > out/latest.json
           (cd out && sha256sum Nova.exe "Nova-$v-setup.exe" > SHA256SUMS.txt)
-          gh release create "v$v" --repo "$RELEASES_REPO" --title "Nova $v" --notes "$notes" out/*
+          gh release create "v$v" --title "Nova $v" --notes "$notes" out/*

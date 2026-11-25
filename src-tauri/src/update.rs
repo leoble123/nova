@@ -1,12 +1,9 @@
 //! Over-the-air updates.
 //!
-//! Nova's source lives in a private repository, so updates are published (by CI) to a public,
-//! binaries-only feed: `latest.json` plus the new `Nova.exe`. An update is accepted only if:
-//! * its version is newer than the running one,
-//! * the downloaded file's SHA-256 matches the manifest, and
-//! * an Ed25519 signature over `nova-update\n<version>\n<sha256>` verifies against the public
-//!   key compiled into this build. The private key exists only as a CI secret, so a
-//!   compromised download host can't push code to anyone.
+//! CI publishes each version as a GitHub Release of this repository: `latest.json` plus the new
+//! `Nova.exe`. Nova reads the manifest over HTTPS from github.com and accepts an update only if
+//! its version is newer than the running one and the downloaded file's SHA-256 matches the
+//! manifest (the same scheme lagless uses).
 //!
 //! The new exe is staged in Nova's data folder and swapped in when Nova quits (or on "Restart
 //! to update"). That works for the installed and the portable copy alike, without admin
@@ -23,9 +20,7 @@ use std::time::Duration;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Where releases are published (public, binaries only). Overridable at build time.
-const DEFAULT_FEED: &str = "https://github.com/leoble123/nova-releases/releases/latest/download/latest.json";
-/// Ed25519 public key (hex) that release manifests must be signed with.
-const PUBLIC_KEY: &str = "c709635e0469de1fbfa38e5f2d7a8a24368a15932b681e792bfe119b81816640";
+const DEFAULT_FEED: &str = "https://github.com/leoble123/nova/releases/latest/download/latest.json";
 const MAX_DOWNLOAD: u64 = 300 * 1024 * 1024;
 pub const PLATFORM: &str = "windows-x86_64";
 
@@ -47,7 +42,6 @@ pub enum State {
 pub struct Asset {
     pub url: String,
     pub sha256: String,
-    pub signature: String,
     #[serde(default)]
     pub size: u64,
 }
@@ -64,7 +58,6 @@ pub struct Manifest {
 
 pub struct Updater {
     feed: String,
-    public_key: [u8; 32],
     dir: PathBuf,
     state: Mutex<State>,
     staged: Mutex<Option<(String, PathBuf)>>,
@@ -89,32 +82,16 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     parse(candidate) > parse(current)
 }
 
-pub fn signed_message(version: &str, sha256_hex: &str) -> Vec<u8> {
-    format!("nova-update\n{version}\n{}", sha256_hex.to_lowercase()).into_bytes()
-}
-
-pub fn verify(public_key: &[u8; 32], version: &str, sha256_hex: &str, signature_hex: &str) -> Result<()> {
-    use ed25519_dalek::{Signature, VerifyingKey};
-    let key = VerifyingKey::from_bytes(public_key).context("bad public key")?;
-    let sig: [u8; 64] = unhex(signature_hex).and_then(|v| v.try_into().ok()).context("malformed signature")?;
-    key.verify_strict(&signed_message(version, sha256_hex), &Signature::from_bytes(&sig)).map_err(|_| anyhow::anyhow!("the update's signature is invalid"))
-}
-
 impl Updater {
     pub fn new(dir: PathBuf, on_change: impl Fn(&State) + Send + Sync + 'static) -> Arc<Updater> {
         let mut feed = option_env!("NOVA_UPDATE_FEED").unwrap_or(DEFAULT_FEED).to_string();
-        let mut key = PUBLIC_KEY.to_string();
-        // Test hooks, debug builds only: a release build only ever trusts the compiled-in key.
+        // Test hook, debug builds only: a release build only ever reads the compiled-in feed.
         if cfg!(debug_assertions) {
             if let Ok(f) = std::env::var("NOVA_UPDATE_FEED") {
                 feed = f;
             }
-            if let Ok(k) = std::env::var("NOVA_UPDATE_PUBKEY") {
-                key = k;
-            }
         }
-        let public_key = unhex(&key).and_then(|v| v.try_into().ok()).expect("valid update public key");
-        let u = Arc::new(Updater { feed, public_key, dir, state: Mutex::new(State::Idle), staged: Mutex::new(None), busy: Mutex::new(()), on_change: Box::new(on_change) });
+        let u = Arc::new(Updater { feed, dir, state: Mutex::new(State::Idle), staged: Mutex::new(None), busy: Mutex::new(()), on_change: Box::new(on_change) });
         u.clean_stale();
         u
     }
@@ -169,8 +146,9 @@ impl Updater {
             return Ok(None);
         }
         let asset = m.platforms.get(PLATFORM).context("no build for this platform in the update")?;
-        // Reject a bad signature before downloading anything big.
-        verify(&self.public_key, &m.version, &asset.sha256, &asset.signature)?;
+        if unhex(&asset.sha256).map(|h| h.len()) != Some(32) {
+            bail!("the update feed has no valid checksum");
+        }
         if asset.size > MAX_DOWNLOAD {
             bail!("the update is unexpectedly large");
         }
@@ -269,7 +247,6 @@ pub fn wait_for_previous() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
 
@@ -312,33 +289,21 @@ mod tests {
         addr
     }
 
-    fn release(key: &SigningKey, version: &str, payload: &[u8], tamper: bool) -> (String, Arc<Updater>, tempfile::TempDir) {
+    fn release(version: &str, payload: &[u8], tamper: bool) -> (Arc<Updater>, tempfile::TempDir) {
         let sha = hex(&Sha256::digest(payload));
-        let sig = hex(&key.sign(&signed_message(version, &sha)).to_bytes());
         let served = if tamper { b"evil payload".to_vec() } else { payload.to_vec() };
-        let manifest_for = |base: &str| {
-            serde_json::json!({ "version": version, "notes": "Faster", "platforms": { PLATFORM: { "url": format!("{base}/Nova.exe"), "sha256": sha, "signature": sig, "size": payload.len() } } }).to_string()
-        };
         let base = serve(vec![("/Nova.exe".into(), served)]);
-        let feed = serve(vec![("/latest.json".into(), manifest_for(&base).into_bytes())]);
+        let manifest = serde_json::json!({ "version": version, "notes": "Faster", "platforms": { PLATFORM: { "url": format!("{base}/Nova.exe"), "sha256": sha, "size": payload.len() } } }).to_string();
+        let feed = serve(vec![("/latest.json".into(), manifest.into_bytes())]);
         let dir = tempfile::tempdir().unwrap();
-        let u = Arc::new(Updater {
-            feed: format!("{feed}/latest.json"),
-            public_key: key.verifying_key().to_bytes(),
-            dir: dir.path().join("update"),
-            state: Mutex::new(State::Idle),
-            staged: Mutex::new(None),
-            busy: Mutex::new(()),
-            on_change: Box::new(|_| {}),
-        });
-        (feed, u, dir)
+        let u = Arc::new(Updater { feed: format!("{feed}/latest.json"), dir: dir.path().join("update"), state: Mutex::new(State::Idle), staged: Mutex::new(None), busy: Mutex::new(()), on_change: Box::new(|_| {}) });
+        (u, dir)
     }
 
     #[test]
     fn downloads_verifies_and_installs() {
-        let key = SigningKey::from_bytes(&[7u8; 32]);
         let payload = vec![42u8; 700_000];
-        let (_, u, dir) = release(&key, "99.0.0", &payload, false);
+        let (u, dir) = release("99.0.0", &payload, false);
         u.check();
         assert_eq!(u.state(), State::Ready { version: "99.0.0".into(), notes: "Faster".into() });
         let target = dir.path().join("Nova.exe");
@@ -348,41 +313,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_tampered_download() {
-        let key = SigningKey::from_bytes(&[7u8; 32]);
-        let (_, u, _d) = release(&key, "99.0.0", b"genuine", true);
+    fn rejects_corrupted_download() {
+        let (u, _d) = release("99.0.0", b"genuine", true);
         u.check();
         assert!(matches!(u.state(), State::Error { message } if message.contains("checksum")));
         assert!(!u.has_staged());
     }
 
     #[test]
-    fn rejects_wrong_signer_and_old_versions() {
-        let attacker = SigningKey::from_bytes(&[9u8; 32]);
-        let (_, mut_u, _d) = release(&attacker, "99.0.0", b"x", false);
-        let u = Arc::new(Updater { public_key: SigningKey::from_bytes(&[7u8; 32]).verifying_key().to_bytes(), feed: mut_u.feed.clone(), dir: mut_u.dir.clone(), state: Mutex::new(State::Idle), staged: Mutex::new(None), busy: Mutex::new(()), on_change: Box::new(|_| {}) });
+    fn ignores_same_or_older_versions() {
+        let (u, _d) = release(VERSION, b"x", false);
         u.check();
-        assert!(matches!(u.state(), State::Error { message } if message.contains("signature")));
-        let key = SigningKey::from_bytes(&[7u8; 32]);
-        let (_, u2, _d2) = release(&key, "0.0.1", b"x", false);
+        assert!(matches!(u.state(), State::UpToDate { .. }));
+        let (u2, _d2) = release("0.0.1", b"x", false);
         u2.check();
         assert!(matches!(u2.state(), State::UpToDate { .. }));
     }
 
-    /// Produced by tools/sign_update.py with the real release key: proves CI's signatures are
-    /// exactly what this build accepts.
     #[test]
-    fn accepts_signature_from_release_tool() {
-        let key: [u8; 32] = unhex(PUBLIC_KEY).unwrap().try_into().unwrap();
-        let sha = "86addef47ef3d897d2eb81e0dcc2f91634bf88b0746abfddbb34fb868fcd6f78";
-        let sig = "d8446b1e39420a4c902656f1f52b15672eb1e13905cf3c9084a5e49669279f9894b8482ed089a19e50a69f547d8baf6752497c7e62a21babe04375775c96d30d";
-        verify(&key, "1.2.3", sha, sig).unwrap();
-        assert!(verify(&key, "1.2.4", sha, sig).is_err(), "signature is bound to the version");
-    }
-
-    #[test]
-    fn compiled_in_key_is_valid() {
-        assert_eq!(unhex(PUBLIC_KEY).unwrap().len(), 32);
-        assert!(ed25519_dalek::VerifyingKey::from_bytes(&unhex(PUBLIC_KEY).unwrap().try_into().unwrap()).is_ok());
+    fn default_feed_is_this_repository() {
+        assert!(DEFAULT_FEED.starts_with("https://github.com/leoble123/nova/releases/"));
     }
 }

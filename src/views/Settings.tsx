@@ -143,7 +143,7 @@ export function SettingsView() {
         <div className="section-head"><h2>Updates</h2></div>
         <div className="card">
           <UpdateRow />
-          <Row title="Update automatically" sub="Checks every few hours and downloads in the background. Updates are signed; anything that doesn't verify is discarded.">
+          <Row title="Update automatically" sub="Checks every few hours and downloads in the background. A download that doesn't match its checksum is discarded.">
             <Switch on={s.autoUpdate} onChange={(v) => put({ autoUpdate: v })} />
           </Row>
         </div>
