@@ -4,7 +4,10 @@
 //
 //   node e2e/run.mjs <path-to-nova-binary> <fixtures-root>
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, statSync } from "node:fs";
+import { createServer } from "node:http";
+import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 
 const [, , APP, WORLD] = process.argv;
@@ -12,8 +15,28 @@ const SHOTS = new URL("../docs/screenshots/", import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });
 const DATA = join(WORLD, "..", "data");
 setTimeout(() => { console.error("suite timed out"); process.exit(2); }, 240000).unref();
+// A local update server publishing "9.9.9", signed with a throwaway key. Debug builds accept
+// NOVA_UPDATE_FEED / NOVA_UPDATE_PUBKEY; release builds only trust the compiled-in key.
+const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+const pubHex = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64url").toString("hex");
+// "New version" = the same app, stripped of debug info (so it's a realistic size and still runs).
+execSync(`strip -o ${APP}.update ${APP}`);
+const payload = readFileSync(`${APP}.update`);
+const sha = createHash("sha256").update(payload).digest("hex");
+const sig = edSign(null, Buffer.from(`nova-update\n9.9.9\n${sha}`), privateKey).toString("hex");
+const server = createServer((req, res) => {
+  if (req.url === "/latest.json") {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    res.end(JSON.stringify({ version: "9.9.9", notes: "Test update", platforms: { "windows-x86_64": { url: `${base}/Nova.exe`, sha256: sha, signature: sig, size: payload.length } } }));
+  } else if (req.url === "/Nova.exe") res.end(payload);
+  else (res.statusCode = 404), res.end();
+}).listen(0, "127.0.0.1");
+await new Promise((r) => server.once("listening", r));
+
 const env = {
   ...process.env,
+  NOVA_UPDATE_FEED: `http://127.0.0.1:${server.address().port}/latest.json`,
+  NOVA_UPDATE_PUBKEY: pubHex,
   GSETTINGS_BACKEND: "memory",
   NOVA_DATA_DIR: DATA,
   NOVA_STEAM_PATH: join(WORLD, "Steam"),
@@ -220,10 +243,30 @@ try {
   ok((await text()).toLowerCase().includes("continue playing"), "last played game featured");
   await sleep(800);
   await shot("08-after-restart");
-  await wd("DELETE", "");
+
+  console.log("9. Over-the-air update");
+  await click(".sidebar .nav", "Settings");
+  if (await js(() => [...document.querySelectorAll(".btn.sm")].some((b) => b.textContent.includes("Check now") && !b.disabled))) await click(".btn.sm", "Check now");
+  await waitFor(() => document.body.innerText.includes("9.9.9 is downloaded and verified"), "update ready", 30000);
+  ok(true, "signed update found, downloaded and verified");
+  await click(".sidebar .nav", "Library");
+  ok(await js(() => !!document.querySelector(".update-card") && document.querySelector(".update-card").innerText.includes("9.9.9")), "sidebar offers Restart to update");
+  await shot("09-update-ready");
+  const before = statSync(APP).mtimeMs;
+  const oldPid = execSync(`pgrep -f -x ${APP} | head -1`).toString().trim();
+  await js(() => [...document.querySelectorAll(".update-card button")][0].click());
+  await sleep(4000);
+  ok(statSync(APP).mtimeMs > before, "running executable replaced in place");
+  const pids = execSync(`pgrep -f "${APP} --after-update" || true`).toString().trim();
+  ok(pids.length > 0, "new version relaunched");
+  ok(execSync(`pgrep -f -x ${APP} || true`).toString().trim().split("\n").every((p) => p !== oldPid), "old instance exited");
+  if (pids) execSync(`kill ${pids.split("\n").join(" ")} || true`);
+  try { await wd("DELETE", ""); } catch { /* the session's app restarted */ }
+  sid = undefined;
 } catch (e) {
   console.error("FAILED:", e.message);
   try { console.error("SIDEBAR:", await js(() => document.querySelector(".sidebar")?.innerText + " | active=" + [...document.querySelectorAll(".nav.active")].map((e) => e.textContent).join(","))); } catch {}
+  try { console.error("UPDATE:", await js(() => [...document.querySelectorAll(".set-row")].map((r) => r.innerText).filter((t) => t.startsWith("Nova")).join(" | "))); } catch {}
   try { console.error("UI:", await js(() => document.getElementById("crash")?.textContent || "")); } catch {}
   failures++;
   try {
@@ -233,6 +276,7 @@ try {
   }
 } finally {
   driver.kill();
+  server.close();
 }
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");
 process.exit(failures ? 1 : 0);

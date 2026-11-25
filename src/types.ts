@@ -155,7 +155,21 @@ export interface StoreReport {
   error: string;
 }
 
+export type UpdateStatus =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "upToDate"; checkedAt: number }
+  | { state: "downloading"; version: string; progress: number }
+  | { state: "ready"; version: string; notes: string }
+  | { state: "error"; message: string };
+
+export interface UpdateInfo {
+  current: string;
+  status: UpdateStatus;
+}
+
 export interface NovaSettings {
+  autoUpdate: boolean;
   scanStoresOnStart: boolean;
   onlineArt: boolean;
   laglessEnabled: boolean;

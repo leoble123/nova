@@ -364,3 +364,5 @@ kbd { font: 600 11px "Inter"; padding: 2px 6px; border-radius: 5px; background: 
 .osd .fps { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .osd .small { font-size: 11px; color: rgba(255,255,255,0.6); font-variant-numeric: tabular-nums; }
 .alert-banner { margin: 10px; padding: 16px 22px; border-radius: 16px; background: rgba(16,18,24,0.88); border: 1px solid rgba(255,255,255,0.14); color: #fff; font: 600 17px "Inter"; display: flex; align-items: center; gap: 14px; animation: pop 0.4s var(--ease); box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
+
+.update-card { padding: 12px; border-radius: 12px; margin-bottom: 8px; background: linear-gradient(180deg, rgba(154,168,255,0.14), rgba(154,168,255,0.05)); border: 1px solid rgba(154,168,255,0.25); color: var(--accent-strong); animation: page-in 0.4s var(--ease); }

@@ -1,0 +1,68 @@
+name: release
+# Shipping = bump `version` in src-tauri/Cargo.toml and push to main.
+# When that version has no release yet, this builds Nova, signs the update, and publishes it to
+# the public binaries-only feed that installed copies update from (the source stays private).
+#
+# Needs two repository secrets:
+#   NOVA_UPDATE_KEY       hex Ed25519 private key matching PUBLIC_KEY in src-tauri/src/update.rs
+#   NOVA_RELEASES_TOKEN   fine-grained token with Contents: read & write on the releases repo
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  RELEASES_REPO: leoble123/nova-releases
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Version not released yet?
+        id: ver
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.NOVA_RELEASES_TOKEN }}
+        run: |
+          v=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::NOVA_RELEASES_TOKEN isn't set; skipping the release"; echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif gh release view "v$v" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            echo "v$v is already released"; echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.ver.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - if: steps.ver.outputs.skip == 'false'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.ver.outputs.skip == 'false'
+        uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - if: steps.ver.outputs.skip == 'false'
+        run: npm ci
+      - if: steps.ver.outputs.skip == 'false'
+        run: cargo test --release
+        working-directory: src-tauri
+      - if: steps.ver.outputs.skip == 'false'
+        run: npx tauri build
+      - name: Sign and publish
+        if: steps.ver.outputs.skip == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.NOVA_RELEASES_TOKEN }}
+          NOVA_UPDATE_KEY: ${{ secrets.NOVA_UPDATE_KEY }}
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          mkdir out
+          cp src-tauri/target/release/nova.exe out/Nova.exe
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe "out/Nova-$v-setup.exe"
+          pip install --quiet cryptography
+          notes=$(git log -1 --format=%s)
+          python tools/sign_update.py out/Nova.exe "$v" "https://github.com/$RELEASES_REPO/releases/download/v$v/Nova.exe" "$notes" > out/latest.json
+          (cd out && sha256sum Nova.exe "Nova-$v-setup.exe" > SHA256SUMS.txt)
+          gh release create "v$v" --repo "$RELEASES_REPO" --title "Nova $v" --notes "$notes" out/*

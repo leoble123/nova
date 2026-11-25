@@ -98,6 +98,31 @@ Tauri 2 (WebView2 on Windows; ~10 MB app, no bundled browser)
 
 Data lives in `%LOCALAPPDATA%\app.nova.launcher` (`library.db`, `art\`).
 
+## Updates (OTA)
+
+Nova updates itself. The source lives in a private repository, so builds are published to a
+public, binaries-only repository (`leoble123/nova-releases`) that installed copies read from;
+no token ships inside the app.
+
+- Every few hours (and from Settings → Updates) Nova reads `latest.json` from the latest
+  release, downloads the new `Nova.exe` in the background, and checks its SHA-256 **and** an
+  Ed25519 signature over `nova-update\n<version>\n<sha256>` against the public key compiled
+  into the app. Anything that doesn't verify is discarded.
+- The verified exe is swapped in when Nova quits, or right away with **Restart to update**
+  (running games keep running; time so far is saved). Works for the installed and the portable
+  copy, without administrator rights. lagless's engine is part of Nova, so it updates too.
+- Turn it off under Settings → Updates.
+
+**Shipping a release:** bump `version` in `src-tauri/Cargo.toml` and push to `main`.
+`.github/workflows/release.yml` builds, tests, signs (`tools/sign_update.py`) and publishes
+`Nova.exe`, the installer and `latest.json` to the releases repository. It needs two secrets in
+this repository: `NOVA_UPDATE_KEY` (the signing key) and `NOVA_RELEASES_TOKEN` (a fine-grained
+token with *Contents: read and write* on `nova-releases` only).
+
+**Rotating the signing key:** `python tools/sign_update.py --keygen`, put the public half in
+`PUBLIC_KEY` in `src-tauri/src/update.rs` and the private half in the secret. Copies built with
+the old key reject updates signed by the new one, so they need one manual download.
+
 ## Build
 
 Requirements: Windows 10/11, [Rust](https://rustup.rs), Node 20+, CMake (for Opus, used by
@@ -123,7 +148,8 @@ Every push builds the installer on GitHub Actions (`.github/workflows/build.yml`
 
 ## Tests
 
-- `cargo test` in `src-tauri`: database, scanner ranking on Unity/Unreal layouts, PE parsing
+- `cargo test` in `src-tauri`: updater (valid update installs; tampered file, wrong signer and
+  older versions are rejected; CI's signature format is accepted), database, scanner ranking on Unity/Unreal layouts, PE parsing
   and garbage input, safety checks, Steam/Epic parsing, title cleaning, launch planning, a real
   process launch with launcher hand-off and playtime, stop, crash recovery, lagless settings
   sharing.
@@ -131,4 +157,5 @@ Every push builds the installer on GitHub Actions (`.github/workflows/build.yml`
   world (`e2e/fixtures.py`): store detection, folder import, a real launch with safety prompt
   and hand-off tracking, working-folder validation, search, collections, live lagless
   streaming to a real lagless receiver with game stats, removal leaving files intact, and
-  persistence across restarts. Screenshots land in `docs/screenshots/`.
+  persistence across restarts, and a full over-the-air update from a local signed feed (found,
+  verified, running exe replaced, new version relaunched). Screenshots land in `docs/screenshots/`.

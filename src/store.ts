@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { api, errText } from "./api";
-import type { AudioState, Collection, Game, LaunchFail, NovaSettings, RunningGame } from "./types";
+import type { AudioState, Collection, Game, LaunchFail, NovaSettings, RunningGame, UpdateInfo } from "./types";
 
 export type View =
   | { name: "library"; collection?: number; filter?: string }
@@ -23,6 +23,7 @@ export interface LaunchPrompt {
 
 interface State {
   prompt: LaunchPrompt | null;
+  update: UpdateInfo | null;
   games: Game[];
   collections: Collection[];
   running: RunningGame[];
@@ -38,6 +39,7 @@ interface State {
 
 let state: State = {
   prompt: null,
+  update: null,
   games: [],
   collections: [],
   running: [],

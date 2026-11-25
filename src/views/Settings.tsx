@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { fail, go, refresh, set, toast, useStore } from "../store";
+import { restartToUpdate } from "../App";
 import type { NovaSettings, StoreReport } from "../types";
 import { Seg, Switch } from "../components/ui";
 import * as I from "../components/Icons";
@@ -14,6 +15,36 @@ function Row({ title, sub, children }: { title: string; sub?: React.ReactNode; c
       </div>
       {children}
     </div>
+  );
+}
+
+function UpdateRow() {
+  const u = useStore((x) => x.update);
+  const [checking, setChecking] = useState(false);
+  const st = u?.status;
+  const sub =
+    !st || st.state === "idle" ? "Not checked yet"
+    : st.state === "checking" ? "Checking…"
+    : st.state === "upToDate" ? `Up to date · checked ${new Date(st.checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`
+    : st.state === "downloading" ? `Downloading ${st.version}… ${Math.round(st.progress * 100)}%`
+    : st.state === "ready" ? `Nova ${st.version} is downloaded and verified${st.notes ? ` · ${st.notes}` : ""}`
+    : `Couldn't update: ${st.message}`;
+  return (
+    <Row title={`Nova ${u?.current ?? ""}`} sub={<span style={{ color: st?.state === "error" ? "var(--warn)" : undefined }}>{sub}</span>}>
+      {st?.state === "ready" ? (
+        <button className="btn sm accent" onClick={restartToUpdate}>Restart to update</button>
+      ) : (
+        <button className="btn sm" disabled={checking || st?.state === "checking" || st?.state === "downloading"} onClick={async () => {
+          setChecking(true);
+          try {
+            set({ update: await api.updateCheck() });
+          } catch (e) {
+            fail(e);
+          }
+          setChecking(false);
+        }}>{checking ? <span className="spinner" /> : <I.IconRefresh size={14} />} Check now</button>
+      )}
+    </Row>
   );
 }
 
@@ -105,6 +136,16 @@ export function SettingsView() {
             <div className="row" style={{ alignItems: "flex-start" }}><I.IconShield size={16} style={{ marginTop: 2, flex: "none" }} /><span>Disguised files, scripts, invalid signatures and programs that ask for admin rights are flagged before they run. Windows Defender and SmartScreen are never bypassed.</span></div>
             <div className="row" style={{ alignItems: "flex-start" }}><I.IconShield size={16} style={{ marginTop: 2, flex: "none" }} /><span>Removing a game deletes only Nova's library entry. Game files are never deleted, moved or modified.</span></div>
           </div>
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="section-head"><h2>Updates</h2></div>
+        <div className="card">
+          <UpdateRow />
+          <Row title="Update automatically" sub="Checks every few hours and downloads in the background. Updates are signed; anything that doesn't verify is discarded.">
+            <Switch on={s.autoUpdate} onChange={(v) => put({ autoUpdate: v })} />
+          </Row>
         </div>
       </div>
 

@@ -9,6 +9,7 @@ pub mod pe;
 pub mod safety;
 pub mod scanner;
 pub mod sources;
+pub mod update;
 
 use launcher::{Elevation, LaunchFail, Launcher, RunningGame};
 use models::*;
@@ -23,6 +24,7 @@ pub struct App {
     pub art: art::ArtStore,
     pub launcher: Arc<Launcher>,
     pub hub: Arc<audio::Hub>,
+    pub updater: Arc<update::Updater>,
     pub data_dir: PathBuf,
 }
 
@@ -430,7 +432,7 @@ async fn scan_stores(handle: AppHandle) -> R<ScanSummary> {
 
 // ------------------------------------------------------------------ settings
 
-const DEFAULT_SETTINGS: &str = r#"{"scanStoresOnStart":true,"onlineArt":false,"laglessEnabled":true,"minimizeOnLaunch":false,"cardSize":1,"showHidden":false,"reduceMotion":false}"#;
+const DEFAULT_SETTINGS: &str = r#"{"autoUpdate":true,"scanStoresOnStart":true,"onlineArt":false,"laglessEnabled":true,"minimizeOnLaunch":false,"cardSize":1,"showHidden":false,"reduceMotion":false}"#;
 
 fn nova_settings(app: &App) -> Value {
     let mut base: Value = serde_json::from_str(DEFAULT_SETTINGS).unwrap();
@@ -471,8 +473,40 @@ fn app_info(app: State<App>) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "dataDir": app.data_dir.to_string_lossy(),
         "laglessVersion": lagless::update::VERSION,
+        "updates": app.updater.state(),
         "windows": cfg!(windows),
     })
+}
+
+// ------------------------------------------------------------------ updates
+
+#[tauri::command(async)]
+fn update_state(app: State<App>) -> Value {
+    json!({ "current": update::VERSION, "status": app.updater.state() })
+}
+
+#[tauri::command(async)]
+fn update_check(app: State<App>) -> Value {
+    app.updater.check();
+    json!({ "current": update::VERSION, "status": app.updater.state() })
+}
+
+/// Install the downloaded update now and start the new version. Running games keep running;
+/// the time played so far is recorded first.
+#[tauri::command(async)]
+fn update_restart(handle: AppHandle) -> R<()> {
+    let app = handle.state::<App>();
+    app.launcher.shutdown();
+    app.hub.shutdown();
+    let exe = std::env::current_exe().map_err(e)?;
+    match app.updater.install_into(None).map_err(e)? {
+        Some(_) => {
+            std::process::Command::new(&exe).args(["--after-update", &std::process::id().to_string()]).spawn().map_err(e)?;
+            handle.exit(0);
+            Ok(())
+        }
+        None => Err("No update is ready to install.".into()),
+    }
 }
 
 // ------------------------------------------------------------------ lagless
@@ -633,7 +667,8 @@ fn data_dir(app: &AppHandle) -> PathBuf {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    update::wait_for_previous();
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -665,7 +700,15 @@ pub fn run() {
             });
             let l2 = launcher.clone();
             let hub = audio::Hub::start(lagless_on, emit, move |fps, low1| l2.perf_sample(fps, low1));
-            app.manage(App { db, art, launcher, hub, data_dir: dir });
+            let h4 = handle.clone();
+            let updater = update::Updater::new(dir.join("update"), move |st| {
+                let _ = h4.emit("update", json!({ "current": update::VERSION, "status": st }));
+            });
+            let db_for_updates = db.clone();
+            updater.spawn_loop(move || {
+                db_for_updates.setting("nova").and_then(|s| serde_json::from_str::<Value>(&s).ok()).and_then(|v| v.get("autoUpdate").and_then(Value::as_bool)).unwrap_or(true)
+            });
+            app.manage(App { db, art, launcher, hub, updater, data_dir: dir });
             // Store libraries refresh in the background; the UI shows what's there meanwhile.
             let h3 = handle.clone();
             std::thread::spawn(move || {
@@ -687,10 +730,6 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == "main" {
                     let app = window.app_handle();
-                    if let Some(s) = app.try_state::<App>() {
-                        s.launcher.shutdown();
-                        s.hub.shutdown();
-                    }
                     for label in ["osd", "alert"] {
                         if let Some(w) = app.get_webview_window(label) {
                             let _ = w.destroy();
@@ -742,7 +781,20 @@ pub fn run() {
             audio_apply_settings,
             audio_allow_fps,
             audio_open_firewall,
+            update_state,
+            update_check,
+            update_restart,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Nova");
+        .build(tauri::generate_context!())
+        .expect("error while starting Nova");
+    app.run(|handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(s) = handle.try_state::<App>() {
+                s.launcher.shutdown();
+                s.hub.shutdown();
+                // Quitting with an update downloaded installs it; the next start is the new version.
+                let _ = s.updater.install_into(None);
+            }
+        }
+    });
 }

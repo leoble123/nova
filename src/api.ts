@@ -52,6 +52,9 @@ export const api = {
   getSettings: () => invoke<T.NovaSettings>("get_settings"),
   setSettings: (settings: Partial<T.NovaSettings>) => invoke<T.NovaSettings>("set_settings", { settings }),
   appInfo: () => invoke<{ version: string; dataDir: string; laglessVersion: string; windows: boolean }>("app_info"),
+  updateState: () => invoke<T.UpdateInfo>("update_state"),
+  updateCheck: () => invoke<T.UpdateInfo>("update_check"),
+  updateRestart: () => invoke<void>("update_restart"),
   // lagless
   audioState: () => invoke<T.AudioState>("audio_state"),
   audioVolume: (volume: number) => invoke<void>("audio_set_volume", { volume }),

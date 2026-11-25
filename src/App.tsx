@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, on } from "./api";
 import { back, fail, get, go, putGame, refresh, refreshCollections, set, toast, useStore } from "./store";
-import type { AudioState, SessionEvent } from "./types";
+import type { AudioState, SessionEvent, UpdateInfo } from "./types";
 import { Library } from "./views/Library";
 import { GameDetails } from "./views/GameDetails";
 import { ImportWizard } from "./views/ImportWizard";
@@ -78,6 +78,35 @@ export function laglessLine(a: AudioState): string {
       return `${who} · ${a.link || a.linkName}${a.lossless ? " · Lossless" : " · Opus"}`;
     }
   }
+}
+
+/** Restarting is safe mid-game: games keep running; time so far is saved. */
+export function restartToUpdate() {
+  api.updateRestart().catch(fail);
+}
+
+function UpdateCard() {
+  const u = useStore((s) => s.update);
+  const running = useStore((s) => s.running.length);
+  const [ask, setAsk] = useState(false);
+  if (u?.status.state !== "ready") return null;
+  const v = u.status.version;
+  return (
+    <div className="update-card">
+      <div className="row" style={{ gap: 8 }}><I.IconRefresh size={14} /><span style={{ fontWeight: 600 }}>Nova {v} is ready</span></div>
+      <div className="faint" style={{ fontSize: 12, margin: "3px 0 9px" }}>Installs when you quit, or now.</div>
+      <button className="btn sm accent" style={{ width: "100%" }} onClick={() => (running ? setAsk(true) : restartToUpdate())}>Restart to update</button>
+      {ask && (
+        <Confirm
+          title={`Update to Nova ${v} now?`}
+          body="Your game keeps running and the time played so far is saved, but playtime after the restart isn't counted for this session. You can also just quit Nova later; the update installs then."
+          confirm="Restart now"
+          onClose={() => setAsk(false)}
+          onYes={restartToUpdate}
+        />
+      )}
+    </div>
+  );
 }
 
 function Sidebar() {
@@ -160,6 +189,7 @@ function Sidebar() {
       {!collections.length && !adding && <div className="faint" style={{ fontSize: 12, padding: "2px 10px" }}>Group games your way.</div>}
 
       <div className="spacer" />
+      <UpdateCard />
       <button className="btn" style={{ width: "100%", marginBottom: 6 }} onClick={() => set({ importOpen: true })}><I.IconPlus size={15} /> Add game</button>
       {navItem(view.name === "settings", <I.IconSettings size={17} />, "Settings", () => go({ name: "settings" }))}
       <LaglessMini />
@@ -248,6 +278,7 @@ export default function App() {
     api.getSettings().then((settings) => set({ settings }));
     refresh();
     api.audioState().then((audio) => set({ audio })).catch(() => {});
+    api.updateState().then((update) => set({ update })).catch(() => {});
     const offs = [
       on<SessionEvent>("session", async (e) => {
         const running = await api.running();
@@ -262,6 +293,11 @@ export default function App() {
         if (e.state === "failed") toast(e.message || `${title} didn't start`, "warn");
       }),
       on<AudioState>("audio-state", (audio) => set({ audio })),
+      on<UpdateInfo>("update", (update) => {
+        const was = get().update?.status.state;
+        set({ update });
+        if (update.status.state === "ready" && was !== "ready") toast(`Nova ${update.status.version} is ready to install`, "good");
+      }),
       on<{ added: number }>("library-changed", (p) => {
         refresh();
         if (p.added) toast(`Found ${p.added} new game${p.added === 1 ? "" : "s"} in your store libraries`, "good");
