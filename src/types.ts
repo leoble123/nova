@@ -172,6 +172,7 @@ export interface NovaSettings {
   autoUpdate: boolean;
   scanStoresOnStart: boolean;
   onlineArt: boolean;
+  autoArt: boolean;
   laglessEnabled: boolean;
   startLaglessOnly: boolean;
   safeGraphics: boolean;

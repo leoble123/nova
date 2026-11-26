@@ -209,7 +209,6 @@ export function GameDetails({ id }: { id: number }) {
   const [fetching, setFetching] = useState(false);
   const menu = useMenu();
   const playMenuRef = useRef<HTMLButtonElement>(null);
-  const settings = useStore((s) => s.settings);
 
   useEffect(() => {
     api.getGame(id).then(putGame).catch(() => {});
@@ -237,7 +236,7 @@ export function GameDetails({ id }: { id: number }) {
     setFetching(true);
     try {
       putGame(await api.fetchOnlineArt(g.id));
-      toast("Updated from Steam", "good");
+      toast("Cover art updated", "good");
     } catch (e) {
       fail(e);
     }
@@ -249,7 +248,7 @@ export function GameDetails({ id }: { id: number }) {
     { label: "Change background…", icon: <I.IconImage size={15} />, onClick: () => setArt("hero") },
     { label: "Change icon…", icon: <I.IconImage size={15} />, onClick: () => setArt("icon") },
     ...(g.cover ? [{ label: "Use generated cover", icon: <I.IconImage size={15} />, onClick: safely(() => api.clearArt(g.id, "cover")) }] : []),
-    ...(g.source === "steam" && settings?.onlineArt ? [{ label: fetching ? "Downloading…" : "Download artwork & info from Steam", icon: <I.IconRefresh size={15} />, onClick: fetchArt, disabled: fetching }] : []),
+    { label: fetching ? "Searching…" : "Find cover art online", icon: <I.IconRefresh size={15} />, onClick: fetchArt, disabled: fetching },
     { sep: true },
     ...(g.installDir ? [{ label: "Show in folder", icon: <I.IconFolder size={15} />, onClick: () => api.reveal(g.installDir).catch(fail) }] : []),
     {

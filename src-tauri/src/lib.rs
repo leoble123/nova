@@ -1,6 +1,7 @@
 //! Nova: a unified PC game library and launcher, with lagless built in.
 
 pub mod art;
+pub mod artfetch;
 pub mod audio;
 pub mod db;
 pub mod launcher;
@@ -115,7 +116,7 @@ fn get_game(app: State<App>, id: i64) -> R<Game> {
 }
 
 #[tauri::command(async)]
-fn add_game(app: State<App>, game: NewGame) -> R<Game> {
+fn add_game(handle: AppHandle, app: State<App>, game: NewGame) -> R<Game> {
     for x in &game.executables {
         let p = Path::new(&x.path);
         if !p.is_absolute() || !p.is_file() {
@@ -129,6 +130,16 @@ fn add_game(app: State<App>, game: NewGame) -> R<Game> {
         }
     }
     ensure_icon(&app, id, false);
+    // Cover art from the internet arrives a moment later; the library refreshes when it does.
+    if game.cover_path.is_empty() && auto_art_on(&app) {
+        std::thread::spawn(move || {
+            if let Some(state) = handle.try_state::<App>() {
+                if let Ok(true) = fetch_art_for(&state, id, false) {
+                    let _ = handle.emit("library-changed", json!({ "added": 0 }));
+                }
+            }
+        });
+    }
     Ok(decorate(&app, app.db.get_game(id).map_err(e)?))
 }
 
@@ -235,44 +246,90 @@ fn clear_art(app: State<App>, game_id: i64, kind: String) -> R<Game> {
     Ok(decorate(&app, app.db.get_game(game_id).map_err(e)?))
 }
 
-/// Optional: fetch missing artwork for Steam games from Steam's CDN (off unless enabled).
+/// Find cover art (and developer/publisher/description if missing) online and store it.
+/// `force` replaces existing art (the manual "Find cover art online"). Returns whether
+/// anything changed.
+pub fn fetch_art_for(app: &App, game_id: i64, force: bool) -> anyhow::Result<bool> {
+    let g = app.db.get_game(game_id)?;
+    let need_cover = force || g.cover.is_empty();
+    let need_hero = force || g.hero.is_empty();
+    let _ = app.db.set_setting(&format!("art_tried:{game_id}"), &now_ms().to_string());
+    let urls = artfetch::find(g.source, &g.source_id, &g.launch_uri, &g.title);
+    let mut changed = false;
+    if need_cover {
+        if let Some(name) = urls.cover.iter().find_map(|u| app.art.download(game_id, "cover", u).ok()) {
+            app.art.remove(&g.cover);
+            app.db.set_art(game_id, "cover", &name)?;
+            changed = true;
+        }
+    }
+    if need_hero {
+        if let Some(name) = urls.hero.iter().find_map(|u| app.art.download(game_id, "hero", u).ok()) {
+            app.art.remove(&g.hero);
+            app.db.set_art(game_id, "hero", &name)?;
+            changed = true;
+        }
+    }
+    if let Some(appid) = &urls.steam_appid {
+        if g.developer.is_empty() || g.publisher.is_empty() || g.description.is_empty() {
+            if let Some((dev, publ, desc)) = sources::steam::store_details(appid) {
+                let upd = GameUpdate {
+                    developer: (g.developer.is_empty() && !dev.is_empty()).then_some(dev),
+                    publisher: (g.publisher.is_empty() && !publ.is_empty()).then_some(publ),
+                    description: (g.description.is_empty() && !desc.is_empty()).then_some(desc),
+                    ..Default::default()
+                };
+                app.db.update_game(game_id, &upd)?;
+                changed = true;
+            }
+        }
+    }
+    Ok(changed)
+}
+
+fn auto_art_on(app: &App) -> bool {
+    nova_settings(app).get("autoArt").and_then(Value::as_bool).unwrap_or(true)
+}
+
+/// Background: covers for every game that has none (each game is retried at most every 3 days).
+fn fetch_missing_art(h: &AppHandle) {
+    let Some(state) = h.try_state::<App>() else { return };
+    if !auto_art_on(&state) {
+        return;
+    }
+    let Ok(games) = state.db.list_games() else { return };
+    let now = now_ms();
+    let mut done = 0;
+    for g in games.iter().filter(|g| g.cover.is_empty()) {
+        let tried = state.db.setting(&format!("art_tried:{}", g.id)).and_then(|t| t.parse::<i64>().ok()).unwrap_or(0);
+        if now - tried < 3 * 24 * 3600 * 1000 {
+            continue;
+        }
+        match fetch_art_for(&state, g.id, false) {
+            Ok(true) => {
+                done += 1;
+                if done % 4 == 0 {
+                    let _ = h.emit("library-changed", json!({ "added": 0 }));
+                }
+            }
+            Ok(false) => {}
+            Err(err) => log_warn!("art for {}: {err:#}", g.title),
+        }
+    }
+    if done > 0 {
+        log_info!("found cover art for {done} games");
+        let _ = h.emit("library-changed", json!({ "added": 0 }));
+    }
+}
+
+/// Manual "Find cover art online" for one game (any source).
 #[tauri::command]
-async fn fetch_online_art(app: State<'_, App>, game_id: i64) -> R<Game> {
-    let g = app.db.get_game(game_id).map_err(e)?;
-    if g.source != Source::Steam {
-        return Err("Online artwork is only available for Steam games. Choose an image instead.".into());
-    }
-    let appid = g.source_id.clone();
-    let dir = app.art.dir().to_path_buf();
-    let need_cover = g.cover.is_empty();
-    let need_hero = g.hero.is_empty();
-    let (cover, hero, meta) = tauri::async_runtime::spawn_blocking(move || {
-        let store = art::ArtStore::new(dir).ok();
-        let c = store.as_ref().filter(|_| need_cover).and_then(|s| s.download(game_id, "cover", &sources::steam::cdn_cover_url(&appid)).ok());
-        let h = store.as_ref().filter(|_| need_hero).and_then(|s| s.download(game_id, "hero", &sources::steam::cdn_hero_url(&appid)).ok());
-        (c, h, sources::steam::store_details(&appid))
-    })
-    .await
-    .map_err(e)?;
-    if let Some((dev, publ, desc)) = &meta {
-        let upd = GameUpdate {
-            developer: g.developer.is_empty().then(|| dev.clone()),
-            publisher: g.publisher.is_empty().then(|| publ.clone()),
-            description: g.description.is_empty().then(|| desc.clone()),
-            ..Default::default()
-        };
-        app.db.update_game(game_id, &upd).map_err(e)?;
-    }
-    if cover.is_none() && hero.is_none() && meta.is_none() {
-        return Err("Couldn't reach Steam (offline?), or it has nothing more for this game.".into());
-    }
-    if let Some(c) = cover {
-        app.art.remove(&g.cover);
-        app.db.set_art(game_id, "cover", &c).map_err(e)?;
-    }
-    if let Some(h) = hero {
-        app.art.remove(&g.hero);
-        app.db.set_art(game_id, "hero", &h).map_err(e)?;
+async fn fetch_online_art(handle: AppHandle, game_id: i64) -> R<Game> {
+    let h = handle.clone();
+    let changed = tauri::async_runtime::spawn_blocking(move || fetch_art_for(&h.state::<App>(), game_id, true)).await.map_err(e)?.map_err(e)?;
+    let app = handle.state::<App>();
+    if !changed {
+        return Err("No cover art found online for this game (or you're offline). You can choose an image instead.".into());
     }
     Ok(decorate(&app, app.db.get_game(game_id).map_err(e)?))
 }
@@ -434,7 +491,7 @@ async fn scan_stores(handle: AppHandle) -> R<ScanSummary> {
 
 // ------------------------------------------------------------------ settings
 
-const DEFAULT_SETTINGS: &str = r#"{"startLaglessOnly":false,"safeGraphics":false,"autoUpdate":true,"scanStoresOnStart":true,"onlineArt":false,"laglessEnabled":true,"minimizeOnLaunch":false,"cardSize":1,"showHidden":false,"reduceMotion":false}"#;
+const DEFAULT_SETTINGS: &str = r#"{"autoArt":true,"startLaglessOnly":false,"safeGraphics":false,"autoUpdate":true,"scanStoresOnStart":true,"onlineArt":false,"laglessEnabled":true,"minimizeOnLaunch":false,"cardSize":1,"showHidden":false,"reduceMotion":false}"#;
 
 fn nova_settings(app: &App) -> Value {
     nova_settings_db(&app.db)
@@ -793,9 +850,22 @@ fn tray_status(hub: &audio::Hub) -> (String, bool, bool, bool) {
 /// Close the library window and its WebView2 processes; keep only lagless (plus game tracking)
 /// running, controlled from a tray icon.
 pub fn enter_lite(app: &AppHandle) -> tauri::Result<()> {
+    LITE.store(true, std::sync::atomic::Ordering::SeqCst);
+    // Without a tray (rare), lagless still runs; starting Nova again opens the library.
+    if let Err(err) = build_tray(app) {
+        log_warn!("no tray icon in lagless-only mode: {err}");
+    }
+    refresh_tray(app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.destroy(); // frees the WebView2 processes
+    }
+    log_info!("lagless-only mode on");
+    Ok(())
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    LITE.store(true, std::sync::atomic::Ordering::SeqCst);
     if TRAY.lock().unwrap().is_none() {
         let status = MenuItem::with_id(app, "status", "lagless", false, None::<&str>)?;
         let mute = CheckMenuItem::with_id(app, "mute", "Mute", true, false, None::<&str>)?;
@@ -841,11 +911,6 @@ pub fn enter_lite(app: &AppHandle) -> tauri::Result<()> {
             })
             .ok();
     }
-    refresh_tray(app);
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.destroy(); // frees the WebView2 processes
-    }
-    log_info!("lagless-only mode on");
     Ok(())
 }
 
@@ -894,6 +959,7 @@ fn start_background_scan(app: &AppHandle) {
         if on || icons > 0 {
             let _ = h3.emit("library-changed", json!({ "added": added }));
         }
+        fetch_missing_art(&h3);
     });
 }
 

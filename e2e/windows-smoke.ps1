@@ -57,6 +57,17 @@ $p = Start-Process $exe -ArgumentList "--lagless-only" -PassThru
 Start-Sleep -Seconds 10
 Memory "lagless-only"
 Shot "lagless-only"
+$web = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
+Write-Output "CHECK lagless-only has no WebView2 processes: $(if ($web -eq 0) { 'PASS' } else { "FAIL ($web)" })"
+# Launching Nova again while it's in lagless-only mode should bring the library back.
+Start-Process $exe | Out-Null
+Start-Sleep -Seconds 8
+$novas = @(Get-Process nova -ErrorAction SilentlyContinue).Count
+$web = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue).Count
+Write-Output "CHECK second launch hands off (one nova.exe): $(if ($novas -eq 1) { 'PASS' } else { "FAIL ($novas)" })"
+Write-Output "CHECK library reopened (WebView2 running): $(if ($web -gt 0) { 'PASS' } else { 'FAIL' })"
+Shot "reopened"
+Memory "after reopening the library"
 Stop-Process -Name nova -Force -ErrorAction SilentlyContinue
 
 Write-Output "=====NOVA.LOG====="

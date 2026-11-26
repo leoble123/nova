@@ -111,8 +111,8 @@ export function SettingsView() {
       <div className="section">
         <div className="section-head"><h2>Artwork</h2></div>
         <div className="card">
-          <Row title="Download missing Steam artwork and info" sub="Off by default. When on, “Download artwork & info from Steam” appears in a Steam game's menu. Everything else works offline, using Steam's own cached art and images you choose.">
-            <Switch on={s.onlineArt} onChange={(v) => put({ onlineArt: v })} />
+          <Row title="Find cover art automatically" sub="Games without a cover get one from Steam (matched by Steam ID, or by exact name) or from the Epic launcher's catalog on this PC. Only game names and IDs are sent. You can always pick your own image instead.">
+            <Switch on={s.autoArt} onChange={(v) => put({ autoArt: v })} />
           </Row>
         </div>
       </div>

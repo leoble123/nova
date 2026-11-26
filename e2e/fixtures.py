@@ -42,7 +42,7 @@ def art(rel, w, h, c1, c2, label):
 # --- Steam
 steam = os.path.join(root, "Steam")
 put("Steam/steamapps/libraryfolders.vdf", '"libraryfolders"\n{\n "0" { "path" "%s" }\n}\n' % steam)
-for appid, name, d in [("1145360", "Hades", "Hades"), ("367520", "Hollow Knight", "Hollow Knight"), ("228980", "Steamworks Common Redistributables", "x")]:
+for appid, name, d in [("620", "Portal 2", "Portal 2"), ("1145360", "Hades", "Hades"), ("367520", "Hollow Knight", "Hollow Knight"), ("228980", "Steamworks Common Redistributables", "x")]:
     put(f"Steam/steamapps/appmanifest_{appid}.acf", f'"AppState"\n{{\n "appid" "{appid}"\n "name" "{name}"\n "installdir" "{d}"\n}}\n')
     os.makedirs(os.path.join(steam, "steamapps/common", d), exist_ok=True)
 art("Steam/appcache/librarycache/1145360_library_600x900.jpg", 600, 900, (120, 30, 20), (20, 8, 10), "HADES")

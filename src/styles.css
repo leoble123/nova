@@ -187,7 +187,7 @@ kbd { font: 600 11px "Inter"; padding: 2px 6px; border-radius: 5px; background: 
 .chip { flex: none; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-w, 172px), 1fr)); gap: 26px 20px; }
-.game-card { position: relative; cursor: pointer; outline: none; animation: card-in 0.4s var(--ease) both; }
+.game-card { position: relative; cursor: pointer; outline: none; animation: card-in 0.4s var(--ease) both; content-visibility: auto; contain-intrinsic-size: auto 320px; }
 @keyframes card-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
 .cover { position: relative; aspect-ratio: 2 / 3; border-radius: 12px; overflow: hidden; background: #15171c; box-shadow: 0 10px 30px -12px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.06); transition: transform 0.35s var(--ease), box-shadow 0.35s var(--ease); }
 .cover img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.6s var(--ease), opacity 0.4s; }
@@ -201,7 +201,7 @@ kbd { font: 600 11px "Inter"; padding: 2px 6px; border-radius: 5px; background: 
 .game-card:hover .play { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 .game-card .play:hover { background: #fff; transform: translate(-50%, -50%) scale(1.08) !important; }
 .cover .badges { position: absolute; top: 9px; left: 9px; right: 9px; display: flex; gap: 6px; align-items: flex-start; }
-.cover .badges .pill { backdrop-filter: blur(14px); background: rgba(10,11,14,0.6); }
+.cover .badges .pill { background: rgba(10,11,14,0.78); }
 .cover .badges .fav { margin-left: auto; color: #ffd36e; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.6)); }
 .cover.missing img, .cover.missing .gen { filter: grayscale(0.9) brightness(0.55); }
 .card-meta { padding: 11px 2px 0; }
@@ -209,9 +209,10 @@ kbd { font: 600 11px "Inter"; padding: 2px 6px; border-radius: 5px; background: 
 .card-meta .s { font-size: 12px; color: var(--faint); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
 
 .gen { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; padding: 18px 16px; overflow: hidden; }
-.gen::before { content: ""; position: absolute; inset: -30%; background: var(--g); filter: blur(10px); }
+.gen::before { content: ""; position: absolute; inset: 0; background: var(--g); }
 .gen::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,0.55)), repeating-linear-gradient(135deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 9px); }
-.gen .ico-bg { position: absolute; left: -25%; top: -25%; width: 150%; height: 150%; object-fit: cover; filter: blur(36px) saturate(1.6) brightness(0.6); opacity: 0.95; }
+/* A colour wash from the icon without a blur filter: a 6px copy scaled up (the GPU smooths it). */
+.gen .ico-bg { position: absolute; left: 50%; top: 42%; width: 6px; height: 6px; transform: translate(-50%, -50%) scale(64); opacity: 0.5; image-rendering: auto; }
 .gen .ico { position: absolute; left: 50%; top: 40%; width: 46%; max-width: 128px; aspect-ratio: 1; object-fit: contain; transform: translate(-50%, -50%); z-index: 1; filter: drop-shadow(0 12px 26px rgba(0,0,0,0.55)); transition: transform 0.5s var(--ease); }
 .game-card:hover .gen .ico { transform: translate(-50%, -52%) scale(1.04); }
 .nowplaying .thumb .gen .ico, .hero-row .thumb .gen .ico { top: 50%; width: 70%; }

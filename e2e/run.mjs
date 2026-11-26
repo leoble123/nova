@@ -108,6 +108,10 @@ try {
   ok(c1.includes("Hades") && c1.includes("Hollow Knight"), `Steam games listed (${c1.join(", ")})`);
   ok(c1.includes("Alan Wake 2"), "Epic game listed");
   ok(!c1.some((t) => t.includes("Redistributables")), "Steam tools filtered out");
+  await waitFor(() => [...document.querySelectorAll(".game-card")].some((c) => c.textContent.includes("Portal 2") && c.querySelector(".cover img")?.naturalWidth >= 300), "online cover", 40000).then(
+    () => ok(true, "Steam game without local art gets its cover from the internet"),
+    () => ok(false, "Steam game without local art gets its cover from the internet"),
+  );
   ok(await js(() => [...document.querySelectorAll(".game-card img")].length >= 2), "Steam's cached cover art is used");
   await shot("01-library");
 
