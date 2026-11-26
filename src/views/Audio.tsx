@@ -288,7 +288,16 @@ export function AudioView() {
   const mic = a.mic ?? {};
   return (
     <div className="page">
-      <div className="lib-head"><h1>Audio</h1><span className="count">powered by lagless</span></div>
+      <div className="lib-head">
+        <h1>Audio</h1>
+        <span className="count">powered by lagless</span>
+        <div className="grow" />
+        {!a.external && (
+          <button className="btn sm" title="Closes the library window and its browser processes; lagless keeps running from the tray" onClick={() => api.laglessOnly().catch(fail)}>
+            Switch to lagless only
+          </button>
+        )}
+      </div>
       <Hero a={a} />
       {a.error && a.phase === "error" && <div className="callout bad" style={{ marginTop: 16 }}><I.IconAlert size={16} /><span className="selectable">{a.error}</span></div>}
 

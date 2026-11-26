@@ -55,6 +55,8 @@ export const api = {
   updateState: () => invoke<T.UpdateInfo>("update_state"),
   updateCheck: () => invoke<T.UpdateInfo>("update_check"),
   updateRestart: () => invoke<void>("update_restart"),
+  laglessOnly: () => invoke<void>("lagless_only"),
+  log: (level: "info" | "error", text: string) => invoke<void>("log_line", { level, text }).catch(() => {}),
   // lagless
   audioState: () => invoke<T.AudioState>("audio_state"),
   audioVolume: (volume: number) => invoke<void>("audio_set_volume", { volume }),

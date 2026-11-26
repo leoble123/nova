@@ -4,6 +4,8 @@ pub mod art;
 pub mod audio;
 pub mod db;
 pub mod launcher;
+#[macro_use]
+pub mod log;
 pub mod models;
 pub mod pe;
 pub mod safety;
@@ -432,11 +434,15 @@ async fn scan_stores(handle: AppHandle) -> R<ScanSummary> {
 
 // ------------------------------------------------------------------ settings
 
-const DEFAULT_SETTINGS: &str = r#"{"autoUpdate":true,"scanStoresOnStart":true,"onlineArt":false,"laglessEnabled":true,"minimizeOnLaunch":false,"cardSize":1,"showHidden":false,"reduceMotion":false}"#;
+const DEFAULT_SETTINGS: &str = r#"{"startLaglessOnly":false,"safeGraphics":false,"autoUpdate":true,"scanStoresOnStart":true,"onlineArt":false,"laglessEnabled":true,"minimizeOnLaunch":false,"cardSize":1,"showHidden":false,"reduceMotion":false}"#;
 
 fn nova_settings(app: &App) -> Value {
+    nova_settings_db(&app.db)
+}
+
+fn nova_settings_db(db: &db::Db) -> Value {
     let mut base: Value = serde_json::from_str(DEFAULT_SETTINGS).unwrap();
-    if let Some(saved) = app.db.setting("nova").and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
+    if let Some(saved) = db.setting("nova").and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
         if let (Some(b), Some(s)) = (base.as_object_mut(), saved.as_object()) {
             for (k, v) in s {
                 b.insert(k.clone(), v.clone());
@@ -601,8 +607,10 @@ fn ensure_overlay(app: &AppHandle, label: &str) -> Option<tauri::WebviewWindow> 
         .focusable(false)
         .shadow(false)
         .visible(false)
+        .additional_browser_args(&browser_args(app))
         .build()
         .ok()?;
+    hook_webview_failures(&w);
     let _ = w.set_ignore_cursor_events(true); // clicks go through to the game
     Some(w)
 }
@@ -657,6 +665,254 @@ fn show_alert(app: &AppHandle) {
     });
 }
 
+// ------------------------------------------------------------------ main window
+
+static SAFE_GRAPHICS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// WebView2 options. Every Nova window must use the same ones (one WebView2 environment per
+/// process). Tauri's defaults, plus GPU off in safe-graphics mode.
+fn browser_args(_app: &AppHandle) -> String {
+    let mut a = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection".to_string();
+    if SAFE_GRAPHICS.load(std::sync::atomic::Ordering::Relaxed) {
+        a.push_str(" --disable-gpu --disable-gpu-compositing");
+    }
+    a
+}
+
+/// Show the library window, creating it if needed (it doesn't exist in lagless-only mode).
+pub fn open_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let built = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("Nova")
+        .inner_size(1360.0, 860.0)
+        .min_inner_size(960.0, 600.0)
+        .decorations(false)
+        .center()
+        .background_color(tauri::window::Color(11, 12, 15, 255))
+        .additional_browser_args(&browser_args(app))
+        .build();
+    match built {
+        Ok(w) => hook_webview_failures(&w),
+        Err(err) => log_warn!("couldn't open the main window: {err}"),
+    }
+}
+
+/// If WebView2's renderer or GPU process dies, the window goes black and stays black. Log it
+/// and reload; after repeated crashes, switch to safe graphics (no GPU) for the next start.
+#[cfg(windows)]
+fn hook_webview_failures(w: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::*;
+    use webview2_com::ProcessFailedEventHandler;
+    let label = w.label().to_string();
+    let app = w.app_handle().clone();
+    let _ = w.with_webview(move |wv| unsafe {
+        let Ok(core) = wv.controller().CoreWebView2() else { return };
+        let reloader = core.clone();
+        let crashes = std::sync::Arc::new(std::sync::Mutex::new(Vec::<std::time::Instant>::new()));
+        let handler = ProcessFailedEventHandler::create(Box::new(move |_, args| {
+            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND(0);
+            if let Some(a) = args {
+                let _ = a.ProcessFailedKind(&mut kind);
+            }
+            let what = match kind {
+                COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => "browser process exited",
+                COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => "renderer exited",
+                COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => "renderer unresponsive",
+                COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED => "GPU process exited",
+                _ => "a helper process exited",
+            };
+            log_warn!("WebView2 ({label}): {what}");
+            let mut c = crashes.lock().unwrap();
+            c.retain(|t| t.elapsed() < std::time::Duration::from_secs(120));
+            c.push(std::time::Instant::now());
+            if c.len() >= 2 {
+                if let Some(state) = app.try_state::<App>() {
+                    let mut v = nova_settings(&state);
+                    v["safeGraphics"] = Value::Bool(true);
+                    let _ = state.db.set_setting("nova", &v.to_string());
+                    log_warn!("repeated WebView2 failures: safe graphics on for the next start");
+                }
+            }
+            if kind != COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED || c.len() >= 2 {
+                let _ = reloader.Reload();
+            }
+            Ok(())
+        }));
+        let mut token = Default::default();
+        let _ = core.add_ProcessFailed(&handler, &mut token);
+    });
+}
+
+#[cfg(not(windows))]
+fn hook_webview_failures(_w: &tauri::WebviewWindow) {}
+
+// ------------------------------------------------------------------ lagless-only mode
+
+static LITE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static STORES_SCANNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct Tray {
+    status: tauri::menu::MenuItem<tauri::Wry>,
+    mute: tauri::menu::CheckMenuItem<tauri::Wry>,
+    pause: tauri::menu::CheckMenuItem<tauri::Wry>,
+    mic: tauri::menu::CheckMenuItem<tauri::Wry>,
+    icon: tauri::tray::TrayIcon<tauri::Wry>,
+}
+
+static TRAY: std::sync::Mutex<Option<Tray>> = std::sync::Mutex::new(None);
+
+pub fn is_lite() -> bool {
+    LITE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn tray_status(hub: &audio::Hub) -> (String, bool, bool, bool) {
+    let a = hub.state();
+    let s = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let lat = a.get("latencyMs").and_then(Value::as_f64).unwrap_or(0.0);
+    let line = match s("phase").as_str() {
+        "streaming" if lat > 0.0 => format!("{:.0} ms to {} · {}", lat, s("peerName"), s("link")),
+        "streaming" => format!("Streaming to {}", s("peerName")),
+        "idle" => format!("Connected to {} · nothing playing", s("peerName")),
+        "searching" | "starting" => "Looking for your Mac or phone…".into(),
+        "paused" => "Paused".into(),
+        "off" => "Audio streaming is off".into(),
+        "error" => format!("Problem: {}", s("error")),
+        other => other.to_string(),
+    };
+    let muted = a.get("muted").and_then(Value::as_bool).unwrap_or(false);
+    let paused = a.get("paused").and_then(Value::as_bool).unwrap_or(false);
+    let mic = a.pointer("/mic/enabled").and_then(Value::as_bool).unwrap_or(false);
+    (line, muted, paused, mic)
+}
+
+/// Close the library window and its WebView2 processes; keep only lagless (plus game tracking)
+/// running, controlled from a tray icon.
+pub fn enter_lite(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    LITE.store(true, std::sync::atomic::Ordering::SeqCst);
+    if TRAY.lock().unwrap().is_none() {
+        let status = MenuItem::with_id(app, "status", "lagless", false, None::<&str>)?;
+        let mute = CheckMenuItem::with_id(app, "mute", "Mute", true, false, None::<&str>)?;
+        let pause = CheckMenuItem::with_id(app, "pause", "Pause streaming", true, false, None::<&str>)?;
+        let mic = CheckMenuItem::with_id(app, "mic", "Use the Mac's mic", true, false, None::<&str>)?;
+        let open = MenuItem::with_id(app, "open", "Open Nova", true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+        let menu = Menu::with_items(app, &[&status, &PredefinedMenuItem::separator(app)?, &mute, &pause, &mic, &PredefinedMenuItem::separator(app)?, &open, &quit])?;
+        let mut b = TrayIconBuilder::with_id("lagless").tooltip("Nova · lagless only").menu(&menu).show_menu_on_left_click(false);
+        if let Some(i) = app.default_window_icon() {
+            b = b.icon(i.clone());
+        }
+        let icon = b
+            .on_menu_event(|app, ev| {
+                let Some(state) = app.try_state::<App>() else { return };
+                let (_, muted, paused, mic) = tray_status(&state.hub);
+                match ev.id().as_ref() {
+                    "mute" => drop(state.hub.set_muted(!muted)),
+                    "pause" => drop(state.hub.set_paused(!paused)),
+                    "mic" => drop(state.hub.set_mic(!mic)),
+                    "open" => leave_lite(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                }
+                refresh_tray(app);
+            })
+            .on_tray_icon_event(|tray, ev| {
+                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
+                    leave_lite(tray.app_handle());
+                }
+            })
+            .build(app)?;
+        *TRAY.lock().unwrap() = Some(Tray { status, mute, pause, mic, icon });
+        let h = app.clone();
+        std::thread::Builder::new()
+            .name("tray".into())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if TRAY.lock().unwrap().is_none() {
+                    break;
+                }
+                refresh_tray(&h);
+            })
+            .ok();
+    }
+    refresh_tray(app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.destroy(); // frees the WebView2 processes
+    }
+    log_info!("lagless-only mode on");
+    Ok(())
+}
+
+fn refresh_tray(app: &AppHandle) {
+    let Some(state) = app.try_state::<App>() else { return };
+    let (line, muted, paused, mic) = tray_status(&state.hub);
+    if let Some(t) = TRAY.lock().unwrap().as_ref() {
+        let _ = t.status.set_text(format!("lagless · {line}"));
+        let _ = t.mute.set_checked(muted);
+        let _ = t.pause.set_checked(paused);
+        let _ = t.mic.set_checked(mic);
+        let _ = t.icon.set_tooltip(Some(format!("Nova (lagless only)\n{line}")));
+    }
+}
+
+pub fn leave_lite(app: &AppHandle) {
+    LITE.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Some(t) = TRAY.lock().unwrap().take() {
+        let _ = t.icon.set_visible(false);
+        drop(t);
+        app.remove_tray_by_id("lagless");
+    }
+    open_main(app);
+    start_background_scan(app);
+    log_info!("lagless-only mode off");
+}
+
+/// Store scan + icon backfill, once per run, only when the library is actually shown.
+fn start_background_scan(app: &AppHandle) {
+    if STORES_SCANNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let h3 = app.clone();
+    std::thread::spawn(move || {
+        let Some(state) = h3.try_state::<App>() else { return };
+        let on = nova_settings(&state).get("scanStoresOnStart").and_then(Value::as_bool).unwrap_or(true);
+        let mut added = 0;
+        if on {
+            let reports = scan_stores_blocking(&state);
+            for r in &reports {
+                log_info!("store {}: detected={} found={} added={} {}", r.store, r.detected, r.found, r.added, r.error);
+            }
+            added = reports.iter().map(|r| r.added).sum();
+        }
+        let icons = backfill_icons(&state);
+        if on || icons > 0 {
+            let _ = h3.emit("library-changed", json!({ "added": added }));
+        }
+    });
+}
+
+#[tauri::command(async)]
+fn lagless_only(handle: AppHandle) -> R<()> {
+    let h = handle.clone();
+    // Tray icons and window teardown belong on the main thread.
+    handle.run_on_main_thread(move || {
+        if let Err(err) = enter_lite(&h) {
+            log_warn!("couldn't enter lagless-only mode: {err}");
+        }
+    }).map_err(e)
+}
+
+#[tauri::command(async)]
+fn log_line(level: String, text: String) {
+    log::line(if level == "error" { "UI-ERR" } else { "UI" }, &text);
+}
+
 // ------------------------------------------------------------------ startup
 
 fn data_dir(app: &AppHandle) -> PathBuf {
@@ -670,17 +926,21 @@ pub fn run() {
     update::wait_for_previous();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
+            // Starting Nova again brings the library up (also from lagless-only mode).
+            if is_lite() {
+                leave_lite(app);
+            } else {
+                open_main(app);
             }
         }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let dir = data_dir(&handle);
+            log::init(&dir);
+            log_info!("Nova {} starting (lagless {}), {} {}", update::VERSION, lagless::update::VERSION, std::env::consts::OS, std::env::consts::ARCH);
             let db = Arc::new(db::Db::open(&dir.join("library.db"))?);
+            SAFE_GRAPHICS.store(nova_settings_db(&db).get("safeGraphics").and_then(Value::as_bool).unwrap_or(false) || std::env::args().any(|a| a == "--safe-graphics"), std::sync::atomic::Ordering::Relaxed);
             let art = art::ArtStore::new(dir.join("art"))?;
             let _ = app.asset_protocol_scope().allow_directory(art.dir(), true);
             let h1 = handle.clone();
@@ -709,26 +969,23 @@ pub fn run() {
                 db_for_updates.setting("nova").and_then(|s| serde_json::from_str::<Value>(&s).ok()).and_then(|v| v.get("autoUpdate").and_then(Value::as_bool)).unwrap_or(true)
             });
             app.manage(App { db, art, launcher, hub, updater, data_dir: dir });
-            // Store libraries refresh in the background; the UI shows what's there meanwhile.
-            let h3 = handle.clone();
-            std::thread::spawn(move || {
-                let state = h3.state::<App>();
-                let on = nova_settings(&state).get("scanStoresOnStart").and_then(Value::as_bool).unwrap_or(true);
-                let mut added = 0;
-                if on {
-                    let reports = scan_stores_blocking(&state);
-                    added = reports.iter().map(|r| r.added).sum();
-                }
-                let icons = backfill_icons(&state);
-                if on || icons > 0 {
-                    let _ = h3.emit("library-changed", json!({ "added": added }));
-                }
-            });
+            let start_lite = std::env::args().any(|a| a == "--lagless-only")
+                || nova_settings(&app.state::<App>()).get("startLaglessOnly").and_then(Value::as_bool).unwrap_or(false);
+            if SAFE_GRAPHICS.load(std::sync::atomic::Ordering::Relaxed) {
+                log_info!("safe graphics: WebView2 GPU acceleration off");
+            }
+            if start_lite {
+                enter_lite(&handle)?;
+            } else {
+                open_main(&handle);
+                // Store libraries refresh in the background; the UI shows what's there meanwhile.
+                start_background_scan(&handle);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if window.label() == "main" {
+                if window.label() == "main" && !is_lite() {
                     let app = window.app_handle();
                     for label in ["osd", "alert"] {
                         if let Some(w) = app.get_webview_window(label) {
@@ -784,11 +1041,20 @@ pub fn run() {
             update_state,
             update_check,
             update_restart,
+            lagless_only,
+            log_line,
         ])
         .build(tauri::generate_context!())
         .expect("error while starting Nova");
     app.run(|handle, event| {
+        // In lagless-only mode there are no windows, and that's fine: keep running.
+        if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+            if is_lite() {
+                api.prevent_exit();
+            }
+        }
         if let tauri::RunEvent::Exit = event {
+            log_info!("Nova exiting");
             if let Some(s) = handle.try_state::<App>() {
                 s.launcher.shutdown();
                 s.hub.shutdown();

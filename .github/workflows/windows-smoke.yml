@@ -1,0 +1,26 @@
+name: windows-smoke
+# Starts the real Windows build, screenshots it over time and measures memory (normal vs
+# lagless-only). Run by hand, or by pushing a diag/* branch.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["diag/**"]
+
+env:
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - run: npm ci
+      - run: npx tauri build --no-bundle
+      - run: pip install --quiet pillow
+      - run: ./e2e/windows-smoke.ps1
+        shell: pwsh

@@ -17,7 +17,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
@@ -37,6 +37,8 @@ lagless = { git = "https://github.com/leoble123/lagless", rev = "fb84267e7ac8c0b
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Same version Tauri uses: lets Nova notice and recover from WebView2 process crashes.
+webview2-com = "0.39"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",

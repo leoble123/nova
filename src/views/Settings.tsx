@@ -128,6 +128,21 @@ export function SettingsView() {
       </div>
 
       <div className="section">
+        <div className="section-head"><h2>Low-profile mode</h2></div>
+        <div className="card">
+          <Row title="Lagless only" sub="Closes the library window and the browser processes behind it (most of Nova's memory). lagless keeps streaming and measuring FPS, games keep being tracked, and a tray icon has mute, pause, mic, Open Nova and Quit.">
+            <button className="btn sm" onClick={() => api.laglessOnly().catch(fail)}>Switch now</button>
+          </Row>
+          <Row title="Start in lagless-only mode" sub="Nova starts straight into the tray. Open the library from the tray icon whenever you want it.">
+            <Switch on={s.startLaglessOnly} onChange={(v) => put({ startLaglessOnly: v })} />
+          </Row>
+          <Row title="Safe graphics" sub="Turns off GPU acceleration and blur effects. Use this if the window goes black or flickers. Takes effect the next time Nova starts.">
+            <Switch on={s.safeGraphics} onChange={async (v) => { await put({ safeGraphics: v }); toast("Restart Nova to apply", "info"); }} />
+          </Row>
+        </div>
+      </div>
+
+      <div className="section">
         <div className="section-head"><h2>Safety</h2></div>
         <div className="card" style={{ padding: 18 }}>
           <div className="col dim" style={{ gap: 8, lineHeight: 1.55 }}>

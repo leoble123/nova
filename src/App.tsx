@@ -52,6 +52,18 @@ function LaglessMini() {
         )}
       </div>
       {a.phase === "streaming" && <div className="faint ellipsis" style={{ fontSize: 11.5, marginTop: 2 }}>{line}</div>}
+      {!a.external && (
+        <button
+          className="lite-btn"
+          title="Close the library and keep only lagless running in the tray"
+          onClick={(e) => {
+            e.stopPropagation();
+            api.laglessOnly().catch(fail);
+          }}
+        >
+          Lagless only
+        </button>
+      )}
     </div>
   );
 }
@@ -273,6 +285,7 @@ export default function App() {
   const importOpen = useStore((s) => s.importOpen);
   const prompt = useStore((s) => s.prompt);
   const reduce = useStore((s) => s.settings?.reduceMotion);
+  const safeFx = useStore((s) => s.settings?.safeGraphics);
 
   useEffect(() => {
     api.getSettings().then((settings) => set({ settings }));
@@ -340,7 +353,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className={`shell ${reduce ? "reduce-motion" : ""}`}>
+    <div className={`shell ${reduce ? "reduce-motion" : ""} ${safeFx ? "no-fx" : ""}`}>
       <div className="ambient" />
       <TitleBar />
       <Sidebar />

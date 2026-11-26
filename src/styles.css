@@ -366,3 +366,13 @@ kbd { font: 600 11px "Inter"; padding: 2px 6px; border-radius: 5px; background: 
 .alert-banner { margin: 10px; padding: 16px 22px; border-radius: 16px; background: rgba(16,18,24,0.88); border: 1px solid rgba(255,255,255,0.14); color: #fff; font: 600 17px "Inter"; display: flex; align-items: center; gap: 14px; animation: pop 0.4s var(--ease); box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
 
 .update-card { padding: 12px; border-radius: 12px; margin-bottom: 8px; background: linear-gradient(180deg, rgba(154,168,255,0.14), rgba(154,168,255,0.05)); border: 1px solid rgba(154,168,255,0.25); color: var(--accent-strong); animation: page-in 0.4s var(--ease); }
+
+.lagless-mini { position: relative; }
+.lite-btn { position: absolute; top: 9px; right: 9px; height: 20px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2); background: transparent; color: var(--faint); font: 600 10.5px "Inter"; cursor: pointer; opacity: 0; transition: opacity 0.2s, color 0.2s, background 0.2s; }
+.lagless-mini:hover .lite-btn { opacity: 1; }
+.lite-btn:hover { color: var(--text); background: var(--panel-3); }
+/* Safe graphics: no blur/backdrop effects (cheap on software rendering). */
+.no-fx *, .no-fx *::before, .no-fx *::after { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+.no-fx .glass { background: #16181e; }
+.no-fx .gen::before, .no-fx .gen .ico-bg, .no-fx .hero-row .bg.blur, .no-fx .details .backdrop .bg.blur { filter: none !important; }
+.no-fx .gen .ico-bg { opacity: 0.25; }

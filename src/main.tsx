@@ -1,7 +1,7 @@
 import { Component, StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { initArt } from "./api";
+import { api, initArt } from "./api";
 import "./styles.css";
 
 /** A rendering bug must never leave a blank window: show what happened and a way out. */
@@ -9,6 +9,9 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
     return { error };
+  }
+  componentDidCatch(error: Error) {
+    api.log("error", `render: ${error}\n${error.stack ?? ""}`);
   }
   render() {
     if (!this.state.error) return this.props.children;
@@ -22,6 +25,14 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
     );
   }
 }
+
+// Anything that goes wrong in the interface ends up in nova.log.
+window.addEventListener("error", (e) => api.log("error", `${e.message} @ ${e.filename}:${e.lineno}`));
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e.reason;
+  // Command failures are shown to the user already; log real exceptions only.
+  if (r instanceof Error) api.log("error", `unhandled: ${r}\n${r.stack ?? ""}`);
+});
 
 initArt()
   .catch(() => {})

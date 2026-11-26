@@ -9,19 +9,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Nova",
-        "width": 1360,
-        "height": 860,
-        "minWidth": 960,
-        "minHeight": 600,
-        "decorations": false,
-        "center": true,
-        "backgroundColor": "#0b0c0f"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost",
       "assetProtocol": {

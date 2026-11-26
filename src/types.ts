@@ -173,6 +173,8 @@ export interface NovaSettings {
   scanStoresOnStart: boolean;
   onlineArt: boolean;
   laglessEnabled: boolean;
+  startLaglessOnly: boolean;
+  safeGraphics: boolean;
   minimizeOnLaunch: boolean;
   cardSize: number;
   showHidden: boolean;
